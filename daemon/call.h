@@ -104,6 +104,7 @@ struct endpoint {
 };
 struct stream_params {
 	unsigned int		index; /* starting with 1 */
+	str			type;
 	struct endpoint		rtp_endpoint;
 	struct endpoint		rtcp_endpoint;
 	unsigned int		consecutive_ports;
@@ -186,8 +187,6 @@ struct packet_stream {
 };
 
 struct call_media {
-	struct obj		obj;
-
 	struct call_monologue	*monologue;
 	struct call		*call;
 
@@ -208,8 +207,6 @@ struct call_media {
 
 /* half a dialogue */
 struct call_monologue {
-	struct obj		obj;
-
 	struct call		*call;
 
 	str			tag;
@@ -289,12 +286,12 @@ struct call *call_get_or_create(const str *callid, const str *viabranch, struct 
 struct callstream *callstream_new(struct call *ca, int num);
 //void callstream_init(struct callstream *s, struct relays_cache *);
 void kernelize(struct callstream *c);
-int call_stream_address(char *o, struct peer *p, enum stream_address_format format, int *len);
-int call_stream_address_alt(char *o, struct peer *p, enum stream_address_format format, int *len);
+//int call_stream_address(char *o, struct peer *p, enum stream_address_format format, int *len);
+//int call_stream_address_alt(char *o, struct peer *p, enum stream_address_format format, int *len);
 
-void relays_cache_init(struct relays_cache *c);
-int relays_cache_want_ports(struct relays_cache *c, int portA, int portB, struct call *call);
-void relays_cache_cleanup(struct relays_cache *c, struct callmaster *m);
+//void relays_cache_init(struct relays_cache *c);
+//int relays_cache_want_ports(struct relays_cache *c, int portA, int portB, struct call *call);
+//void relays_cache_cleanup(struct relays_cache *c, struct callmaster *m);
 
 enum transport_protocol transport_protocol(const str *s);
 

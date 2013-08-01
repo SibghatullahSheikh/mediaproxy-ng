@@ -864,6 +864,7 @@ int sdp_streams(const GQueue *sessions, GQueue *streams, struct sdp_ng_flags *fl
 
 			sp->consecutive_ports = media->port_count;
 			sp->protocol = transport_protocol(&media->transport);
+			sp->type = media->media_type;
 
 			attr = attr_get_by_id(&media->attributes, ATTR_CRYPTO);
 			if (attr) {

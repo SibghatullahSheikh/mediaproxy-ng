@@ -1272,12 +1272,13 @@ release_restart:
 	m->lastport = port;
 	mutex_unlock(&m->portlock);
 
-	mylog(LOG_DEBUG, LOG_PREFIX_CI "Opened ports %u..%u for RTP", 
+	mylog(LOG_DEBUG, LOG_PREFIX_CI "Opened ports %u..%u for media relay", 
 		LOG_PARAMS_CI(c), array[0].localport, array[array_len - 1].localport);
 	return 0;
 
 fail:
-	mylog(LOG_ERR, LOG_PREFIX_CI "Failed to get RTP port pair", LOG_PARAMS_CI(c));
+	mylog(LOG_ERR, LOG_PREFIX_CI "Failed to get %u consecutive UDP ports for relay",
+			LOG_PARAMS_CI(c), array_len);
 	return -1;
 }
 
@@ -1470,70 +1471,180 @@ static void callstream_free(void *ptr) {
 	obj_put(s->call);
 }
 
-void relays_cache_init(struct relays_cache *c) {
-	memset(c, -1, sizeof(*c));
-	c->relays_open = 0;
-	c->array_ptrs[0] = c->relays_A;
-	c->array_ptrs[1] = c->relays_B;
+static struct call_media *__get_media(struct call_monologue *ml, GList **it, const struct stream_params *sp) {
+	struct call_media *med;
+
+	/* iterator points to last seen element, or NULL if uninitialized */
+	if (!*it)
+		*it = ml->medias.head;
+	else
+		*it = (*it)->next;
+
+	/* possible incremental update, hunt for correct media struct */
+	while (*it) {
+		med = (*it)->data;
+		if (med->index == sp->index)
+			return med;
+		*it = (*it)->next;
+	}
+
+	med = g_slice_alloc0(sizeof(*med));
+	med->monologue = ml;
+	med->call = ml->call;
+	med->index = sp->index;
+	call_str_cpy(ml->call, &med->type, &sp->type);
+
+	g_queue_push_tail(ml->medias, med);
+	*it = ml->medias.tail;
+
+	return med;
 }
 
-int relays_cache_want_ports(struct relays_cache *c, int portA, int portB, struct call *call) {
-	if (c->relays_open + 2 > G_N_ELEMENTS(c->relays_A))
-		return -1;
-	if (get_consecutive_ports(&c->relays_A[c->relays_open], 2, portA, call))
-		return -1;
-	if (get_consecutive_ports(&c->relays_B[c->relays_open], 2, portB, call))
-		return -1;
-	c->relays_open += 2;
-	return 0;
+static void stream_free(void *p) {
+	struct packet_stream *s = p;
+
+	obj_put(s->call);
 }
 
-static int relays_cache_get_ports(struct relays_cache *c, int num, struct call *call) {
-	num *= 2;
-	if (c->relays_open >= num)
+static int __num_media_streams(struct call_media *media, unsigned int num_ports) {
+	struct udp_fd fd_arr[16];
+	struct packet_stream *stream;
+	struct call *call = media->call;
+	unsigned int i;
+
+	if (media->streams.length >= num_ports)
 		return 0;
+	if (num_ports > G_N_ELEMENTS(fd_arr))
+		return -1;
+	if (get_consecutive_ports(fd_arr, num_ports, 0, call))
+		return -1;
 
-	if (c->relays_open + num > G_N_ELEMENTS(c->relays_A))
-		return -1;
-	if (get_consecutive_ports(&c->relays_A[c->relays_open], num, 0, call))
-		return -1;
-	if (get_consecutive_ports(&c->relays_B[c->relays_open], num, 0, call))
-		return -1;
-	c->relays_open += num;
+	g_queue_clear(&media->streams);
+
+	for (i = 0; i < num_ports; i++) {
+		stream = obj_alloc0("packet_stream", sizeof(*stream), stream_free);
+		stream->call = obj_get(call);
+		stream->media = media;
+		stream->fd = fd_arr[i];
+		g_queue_push_tail(&media->streams, stream);
+		call->streams = g_list_prepend(call->streams, stream);
+	}
+
 	return 0;
 }
 
-static void relays_cache_port_used(struct relays_cache *c) {
-	if (c->relays_open < 2)
-		return;
+static struct packet_stream *__get_stream(struct call_media *media, GList **iter) {
+	if (!*iter)
+		*iter = media->streams.head;
+	else
+		*iter = (*iter)->next;
 
-	c->relays_open -= 2;
-	if (c->relays_open) {
-		memmove(&c->relays_A[0], &c->relays_A[2], c->relays_open * sizeof(*c->relays_A));
-		memmove(&c->relays_B[0], &c->relays_B[2], c->relays_open * sizeof(*c->relays_B));
-	}
-	c->relays_A[c->relays_open].fd = -1;
-	c->relays_B[c->relays_open].fd = -1;
-	c->relays_A[c->relays_open + 1].fd = -1;
-	c->relays_B[c->relays_open + 1].fd = -1;
+	return (*iter)->data;
 }
 
-void relays_cache_cleanup(struct relays_cache *c, struct callmaster *m) {
-	int i;
+/* called with call->master_lock held */
+static int monologue_offer(struct call_monologue *monologue, GQueue *streams) {
+	struct stream_params *sp;
+	GList *ml_media, *other_ml_media, *iter, *other_iter;
+	struct call_media *media, *other_media;
+	unsigned int i, num_ports;
+	struct call *call = monologue->call;
+	struct call_monologue *other_ml = monologue->active_dialogue;
+	struct packet_stream *stream, *other_stream;
 
-	for (i = 0; i < G_N_ELEMENTS(c->relays_A); i++) {
-		if (c->relays_A[i].fd == -1)
-			break;
-		release_port(&c->relays_A[i], m);
+	/* we must have a complete dialogue, even though the to-tag (other_ml->tag)
+	 * may not be known yet */
+	if (!other_ml)
+		return -1;
+
+	ml_media = other_ml_media = NULL;
+
+	for (i = s->head; i; i = i->next) {
+		sp = i->data;
+
+		/* first, check for existance of call_media struct on both sides of
+		 * the dialogue */
+		media = __get_media(monologue, &ml_media, sp);
+		other_media = __get_media(other_ml, &other_ml_media, sp);
+
+		/* determine number of consecutive ports needed locally. we don't
+		 * multiplex on our side by default.
+		 * XXX only do *=2 for RTP streams? */
+		num_ports = sp->consecutive_ports;
+		num_ports *= 2;
+
+		if (__num_media_streams(media, num_ports))
+			goto error;
+		/* we may not need the same number of ports, but allocate them anyway,
+		 * just in case */
+		if (__num_media_streams(other_media, num_ports))
+			goto error;
+
+		/* initialize and pair up each packet stream */
+		i = 0;
+		iter = media->streams.head;
+		other_iter = NULL;
+
+		while (iter) {
+			stream = iter->data;
+
+			if (!(i & 1)) {
+				/* RTP */
+				other_stream = __get_stream(other_media, &other_item);
+
+				stream->rtp_sink = other_stream;
+				other_stream->rtp_sink = stream;
+
+				other_stream->endpoint = sp->rtp_endpoint;
+				other_stream->advertised_endpoint = other_stream->endpoint;
+
+				goto next;
+			}
+
+			/* RTCP */
+			stream->rtcp = 1;
+			stream->implicit_rtcp = 1;
+
+			if (sp->rtcp_mux) {
+				assert(other_stream != NULL);
+
+				other_stream->rtcp = 1;
+
+				/* endpoint already set */
+			}
+			else if (sp->rtcp_endpoint.port) {
+				other_stream = __get_stream(other_media, &other_item);
+
+				other_stream->endpoint = sp->rtcp_endpoint;
+				other_stream->advertised_endpoint = other_stream->endpoint;
+			}
+			else {
+				other_stream = __get_stream(other_media, &other_item);
+
+				other_stream->implicit_rtcp = 1;
+				other_stream->endpoint = sp->rtp_endpoint;
+				other_stream->endpoint.port++;
+				other_stream->advertised_endpoint = other_stream->endpoint;
+			}
+
+			stream->rtcp_sink = other_stream;
+			other_stream->rtcp_sink = stream;
+			other_stream->rtcp = 1;
+
+next:
+			other_stream->filled = 1;
+			iter = iter->next;
+			i++;
+		}
 	}
-	for (i = 0; i < G_N_ELEMENTS(c->relays_B); i++) {
-		if (c->relays_B[i].fd == -1)
-			break;
-		release_port(&c->relays_B[i], m);
-	}
+
+	return 0;
+
+error:
+	return -1;
 }
 
-/* called with call->lock held */
+/* called with call->master_lock held */
 static int call_streams(struct call *c, GQueue *s, const str *tag, enum call_opmode opmode) {
 	GQueue *q;
 	GList *i, *l;
@@ -2011,7 +2122,7 @@ static struct call *call_create(const str *callid, struct callmaster *m) {
 }
 
 /* returns call with lock held */
-struct call *call_get_or_create(const str *callid, const str *viabranch, struct callmaster *m) {
+struct call *call_get_or_create(const str *callid, struct callmaster *m) {
 	struct call *c;
 
 restart:
@@ -2042,7 +2153,7 @@ restart:
 }
 
 /* returns call with lock held, or NULL if not found */
-static struct call *call_get(const str *callid, const str *viabranch, struct callmaster *m) {
+static struct call *call_get(const str *callid, struct callmaster *m) {
 	struct call *ret;
 
 	rwlock_lock_r(&m->hashlock);
@@ -2060,10 +2171,79 @@ static struct call *call_get(const str *callid, const str *viabranch, struct cal
 }
 
 /* returns call with lock held, or possibly NULL iff opmode == OP_ANSWER */
-static struct call *call_get_opmode(const str *callid, const str *viabranch, struct callmaster *m, enum call_opmode opmode) {
+static struct call *call_get_opmode(const str *callid, struct callmaster *m, enum call_opmode opmode) {
 	if (opmode == OP_OFFER)
-		return call_get_or_create(callid, viabranch, m);
-	return call_get(callid, viabranch, m);
+		return call_get_or_create(callid, m);
+	return call_get(callid, m);
+}
+
+/* must be called with call->master_lock held */
+static struct call_monologue *__monologue_create(struct call *call) {
+	struct call_monologue *ret;
+
+	ret = g_slice_alloc0(sizeof(*ret));
+
+	ret->call = call;
+	ret->created = poller_now;
+	g_queue_init(&ret->dialoges);
+	ret->other_tags = g_hash_table_new(str_hash, str_equal);
+	g_queue_init(&ret->medias);
+}
+
+static void __monologue_tag(struct call_monologue *ml, const str *tag) {
+	struct call *call = ml->call;
+
+	call_str_cpy(call, &ml->tag, tag);
+	g_hash_table_insert(call->tags, &ml->tag, ret);
+}
+
+/* must be called with call->master_lock held */
+static struct call_monologue *call_get_monologue(struct call *call, const str *fromtag) {
+	struct call_monologue *ret;
+
+	ret = g_hash_table_lookup(call->tags, fromtag);
+	if (ret)
+		return ret;
+
+	ret = __monologue_create(call);
+	__monologue_tag(ret, fromtag);
+	/* we need both sides of the dialogue even in the initial offer, so create
+	 * another monologue without to-tag (to be filled in later) */
+	ret->active_dialogue = __monologue_create(call);
+
+	return ret;
+}
+
+/* must be called with call->master_lock held */
+static struct call_monologue *call_get_dialogue(struct call *call, const str *fromtag, const str *totag) {
+	struct call_monologue *ft, *ret;
+
+	/* if the to-tag is known already, return that */
+	ret = g_hash_table_lookup(call->tags, totag);
+	if (ret)
+		return ret;
+
+	/* otherwise, at least the from-tag has to be known. it's an error if it isn't */
+	ft = g_hash_table_lookup(call->tags, fromtag);
+	if (!ft)
+		return NULL;
+
+	/* check for a half-complete dialogue and fill in the missing half if possible */
+	ret = ft->active_dialogue;
+	if (!ret->tag.s)
+		goto tag;
+
+	/* this is a second dialogue created from a single from-tag */
+	ret = __monologue_create(call);
+
+tag:
+	__monologue_tag(ret, totag);
+	g_hash_table_insert(ret->other_tags, &ft->tag, ft);
+	g_hash_table_insert(ft->other_tags, &ret->tag, ret);
+	ret->active_dialogue = ft;
+	ft->active_dialogue = ret;
+
+	return ret;
 }
 
 static int addr_parse_udp(struct stream_input *st, char **out) {
@@ -2608,32 +2788,13 @@ static void call_ng_process_flags(struct sdp_ng_flags *out, bencode_item_t *inpu
 	bencode_dictionary_get_str(input, "media address", &out->media_address);
 }
 
-static unsigned int stream_hash(struct stream_input *s) {
-	unsigned int ret, *p;
-
-	ret = s->stream.port;
-	p = (void *) &s->stream.ip46;
-	while (((void *) p) < (((void *) &s->stream.ip46) + sizeof(s->stream.ip46))) {
-		ret ^= *p;
-		p++;
-	}
-	return ret;
-}
-
-static int stream_equal(struct stream_input *a, struct stream_input *b) {
-	if (a->stream.port != b->stream.port)
-		return 0;
-	if (memcmp(&a->stream.ip46, &b->stream.ip46, sizeof(a->stream.ip46)))
-		return 0;
-	return 1;
-}
-
 static const char *call_offer_answer_ng(bencode_item_t *input, struct callmaster *m, bencode_item_t *output, enum call_opmode opmode, const char *tagname) {
-	str sdp, fromtag, viabranch, callid;
+	str sdp, fromtag, callid;
 	char *errstr;
 	GQueue parsed = G_QUEUE_INIT;
 	GQueue streams = G_QUEUE_INIT;
 	struct call *call;
+	struct call_monologue *monologue;
 	int ret, num;
 	struct sdp_ng_flags flags;
 	struct sdp_chopper *chopper;
@@ -2645,8 +2806,8 @@ static const char *call_offer_answer_ng(bencode_item_t *input, struct callmaster
 		return "No call-id in message";
 	if (!bencode_dictionary_get_str(input, tagname, &fromtag))
 		return "No from-tag in message";
-	bencode_dictionary_get_str(input, "via-branch", &viabranch);
-	log_info = &viabranch;
+	//bencode_dictionary_get_str(input, "via-branch", &viabranch);
+	//log_info = &viabranch;
 
 	if (sdp_parse(&sdp, &parsed))
 		return "Failed to parse SDP";
@@ -2658,15 +2819,16 @@ static const char *call_offer_answer_ng(bencode_item_t *input, struct callmaster
 	if (sdp_streams(call, &parsed, &streams, &flags))
 		goto out;
 
-	call = call_get_opmode(&callid, &viabranch, m, opmode);
+	call = call_get_opmode(&callid, m, opmode);
 	errstr = "Unknown call-id";
 	if (!call)
 		goto out;
-	log_info = &viabranch;
+	//log_info = &viabranch;
+	monologue = call_get_monologue(call, &fromtag);
 
 	chopper = sdp_chopper_new(&sdp);
 	bencode_buffer_destroy_add(output->buffer, (free_func_t) sdp_chopper_destroy, chopper);
-	num = call_streams(call, &streams, &fromtag, opmode);
+	num = monologue_offer(monologue, &streams);
 	ret = sdp_replace(chopper, &parsed, call, (num >= 0) ? opmode : (opmode ^ 1), &flags, streamhash);
 
 	mutex_unlock(&call->lock);
