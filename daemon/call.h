@@ -127,7 +127,6 @@ struct streamrelay {
 	struct stats		stats;
 	struct stats		kstats;
 	time_t			last;
-	const struct streamhandler *handler;
 	struct crypto_context_pair crypto;
 	int			stun:1;
 	int			rtcp:1;
@@ -165,6 +164,7 @@ struct callstream {
 
 struct packet_stream {
 	struct obj		obj;
+	mutex_t			lock;
 
 	struct call_media	*media;
 	struct call		*call;
@@ -172,6 +172,7 @@ struct packet_stream {
 	struct udp_fd		fd;
 	struct packet_stream	*rtp_sink;
 	struct packet_stream	*rtcp_sink;
+	const struct streamhandler *handler;
 	struct endpoint		endpoint;
 	struct endpoint		advertised_endpoint;
 	struct crypto_context_pair crypto;
@@ -184,6 +185,9 @@ struct packet_stream {
 	int			implicit_rtcp:1;
 	int			stun:1;
 	int			filled:1;
+	int			confirmed:1;
+	int			kernelized:1;
+	int			no_kernel_support:1;
 };
 
 struct call_media {
@@ -285,7 +289,7 @@ void calls_dump_redis(struct callmaster *);
 struct call *call_get_or_create(const str *callid, const str *viabranch, struct callmaster *m);
 struct callstream *callstream_new(struct call *ca, int num);
 //void callstream_init(struct callstream *s, struct relays_cache *);
-void kernelize(struct callstream *c);
+void kernelize(struct packet_stream *);
 //int call_stream_address(char *o, struct peer *p, enum stream_address_format format, int *len);
 //int call_stream_address_alt(char *o, struct peer *p, enum stream_address_format format, int *len);
 

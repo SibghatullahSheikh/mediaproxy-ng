@@ -92,9 +92,9 @@ struct call_stats {
 };
 
 struct streamhandler {
-	int		(*rewrite)(str *, struct streamrelay *);
-	int		(*kernel_decrypt)(struct mediaproxy_srtp *, struct streamrelay *);
-	int		(*kernel_encrypt)(struct mediaproxy_srtp *, struct streamrelay *);
+	int		(*rewrite)(str *, struct packet_stream *);
+	int		(*kernel_decrypt)(struct mediaproxy_srtp *, struct packet_stream *);
+	int		(*kernel_encrypt)(struct mediaproxy_srtp *, struct packet_stream *);
 };
 
 static char *rtp_codecs[] = {
@@ -131,20 +131,20 @@ const char *transport_protocol_strings[__PROTO_LAST] = {
 
 
 
-static void determine_handler(struct streamrelay *in);
+static void determine_handler(struct packet_stream *in);
 
-static int __k_null(struct mediaproxy_srtp *s, struct streamrelay *r);
-static int __k_srtp_encrypt(struct mediaproxy_srtp *s, struct streamrelay *r);
-static int __k_srtp_decrypt(struct mediaproxy_srtp *s, struct streamrelay *r);
+static int __k_null(struct mediaproxy_srtp *s, struct packet_stream *);
+static int __k_srtp_encrypt(struct mediaproxy_srtp *s, struct packet_stream *);
+static int __k_srtp_decrypt(struct mediaproxy_srtp *s, struct packet_stream *);
 
-static int call_avp2savp_rtp(str *s, struct streamrelay *r);
-static int call_savp2avp_rtp(str *s, struct streamrelay *r);
-static int call_avp2savp_rtcp(str *s, struct streamrelay *r);
-static int call_savp2avp_rtcp(str *s, struct streamrelay *r);
-static int call_avpf2avp_rtcp(str *s, struct streamrelay *r);
-static int call_avpf2savp_rtcp(str *s, struct streamrelay *r);
-static int call_savpf2avp_rtcp(str *s, struct streamrelay *r);
-static int call_savpf2savp_rtcp(str *s, struct streamrelay *t);
+static int call_avp2savp_rtp(str *s, struct packet_stream *);
+static int call_savp2avp_rtp(str *s, struct packet_stream *);
+static int call_avp2savp_rtcp(str *s, struct packet_stream *);
+static int call_savp2avp_rtcp(str *s, struct packet_stream *);
+static int call_avpf2avp_rtcp(str *s, struct packet_stream *);
+static int call_avpf2savp_rtcp(str *s, struct packet_stream *);
+static int call_savpf2avp_rtcp(str *s, struct packet_stream *);
+static int call_savpf2savp_rtcp(str *s, struct packet_stream *);
 
 static const struct streamhandler __sh_noop = {
 	.kernel_decrypt		= __k_null,
@@ -190,117 +190,113 @@ static const struct mediaproxy_srtp __mps_null = {
 
 
 static void call_destroy(struct call *);
-static void unkernelize(struct peer *);
-static void relays_cache_port_used(struct relays_cache *c);
+static void unkernelize(struct packet_stream *);
 static void ng_call_stats(struct call *call, const str *fromtag, const str *totag, bencode_item_t *output);
 
 
 
 
 static void stream_closed(int fd, void *p, uintptr_t u) {
-	struct callstream *cs = p;
-	struct streamrelay *r;
-	struct call *c;
+	struct packet_stream *stream = p;
+	struct call *c = NULL;
 	int i;
 	socklen_t j;
 
-	mutex_lock(&cs->lock);
-	r = &cs->peers[u >> 1].rtps[u & 1];
-	assert(r->fd.fd == fd);
-	mutex_unlock(&cs->lock);
-	c = cs->call;
+	mutex_lock(&stream->lock);
+	assert(stream->fd.fd == fd);
+	if (stream->call)
+		c = obj_get(stream->call);
+	mutex_unlock(&stream->lock);
+	if (!c)
+		return;
 
 	j = sizeof(i);
 	getsockopt(fd, SOL_SOCKET, SO_ERROR, &i, &j);
-	mylog(LOG_WARNING, LOG_PREFIX_C "Read error on RTP socket: %i (%s) -- closing call", LOG_PARAMS_C(c), i, strerror(i));
+	mylog(LOG_WARNING, LOG_PREFIX_C "Read error on media socket: %i (%s) -- closing call", LOG_PARAMS_C(c), i, strerror(i));
 
 	call_destroy(c);
+	obj_put(c);
 }
 
 
 
 
-/* called with callstream->lock held */
-void kernelize(struct callstream *c) {
-	int i, j;
-	struct peer *p, *pp;
-	struct streamrelay *r, *rp;
+/* called with stream->lock held */
+void kernelize(struct packet_stream *stream) {
 	struct mediaproxy_target_info mpt;
-	struct callmaster *cm = c->call->callmaster;
+	struct call *call = stream->call;
+	struct callmaster *cm = call->callmaster;
+	struct packet_stream *sink;
 
-	if (cm->conf.kernelfd < 0 || cm->conf.kernelid == -1)
+	if (stream->kernelized)
 		return;
+	if (cm->conf.kernelfd < 0 || cm->conf.kernelid == -1)
+		goto no_kernel;
 
-	mylog(LOG_DEBUG, LOG_PREFIX_C "Kernelizing RTP streams", LOG_PARAMS_C(c->call));
+	mylog(LOG_DEBUG, LOG_PREFIX_C "Kernelizing media stream with local port %u",
+			LOG_PARAMS_C(call), stream->fd.localport);
+
+	sink = stream->rtp_sink;
+	if (!sink && stream->rtcp)
+		sink = stream->rtcp_sink;
+	if (!sink) {
+		mylog(LOG_WARNING, LOG_PREFIX_C "Attempt to kernelize stream without sink",
+				LOG_PARAMS_C(call));
+		goto no_kernel;
+	}
 
 	ZERO(mpt);
 
-	for (i = 0; i < 2; i++) {
-		p = &c->peers[i];
-		pp = &c->peers[i ^ 1];
+	determine_handler(stream);
 
-		if (p->kernelized)
-			continue;
+	if (is_addr_unspecified(&sink->advertised_endpoint.ip46)
+			|| !sink->advertised_endpoint.port)
+		goto no_kernel;
+	if (!stream->handler->kernel_decrypt
+			|| !stream->handler->kernel_encrypt)
+		goto no_kernel;
 
-		for (j = 0; j < 2; j++) {
-			r = &p->rtps[j];
-			rp = &pp->rtps[j];
+	mpt.target_port = stream->fd.localport;
+	mpt.tos = cm->conf.tos;
+	mpt.src_addr.port = sink->fd.localport;
+	mpt.dst_addr.port = sink->endpoint.port;
+	mpt.rtcp_mux = stream->media->rtcp_mux;
 
-			determine_handler(r);
-
-			if (is_addr_unspecified(&r->peer_advertised.ip46)
-					|| !r->peer_advertised.port)
-				goto no_kernel_stream;
-			if (!r->handler->kernel_decrypt
-					|| !r->handler->kernel_encrypt)
-				goto no_kernel_stream;
-
-			mpt.target_port = r->fd.localport;
-			mpt.tos = cm->conf.tos;
-			mpt.src_addr.port = rp->fd.localport;
-			mpt.dst_addr.port = r->peer.port;
-			mpt.rtcp_mux = r->rtcp_mux;
-
-			if (IN6_IS_ADDR_V4MAPPED(&r->peer.ip46)) {
-				mpt.src_addr.family = AF_INET;
-				mpt.src_addr.ipv4 = cm->conf.ipv4;
-				mpt.dst_addr.family = AF_INET;
-				mpt.dst_addr.ipv4 = r->peer.ip46.s6_addr32[3];
-			}
-			else {
-				mpt.src_addr.family = AF_INET6;
-				memcpy(mpt.src_addr.ipv6, &cm->conf.ipv6, sizeof(mpt.src_addr.ipv6));
-				mpt.dst_addr.family = AF_INET6;
-				memcpy(mpt.dst_addr.ipv6, &r->peer.ip46, sizeof(mpt.src_addr.ipv6));
-			}
-
-			r->handler->kernel_decrypt(&mpt.decrypt, r);
-			r->handler->kernel_encrypt(&mpt.encrypt, r);
-
-			if (!mpt.encrypt.cipher || !mpt.encrypt.hmac)
-				goto no_kernel_stream;
-			if (!mpt.decrypt.cipher || !mpt.decrypt.hmac)
-				goto no_kernel_stream;
-
-			ZERO(r->kstats);
-
-			kernel_add_stream(cm->conf.kernelfd, &mpt, 0);
-			
-			continue;
-
-no_kernel_stream:
-			r->no_kernel_support = 1;
-		}
-
-		p->kernelized = 1;
+	if (IN6_IS_ADDR_V4MAPPED(&sink->endpoint.ip46)) {
+		mpt.src_addr.family = AF_INET;
+		mpt.src_addr.ipv4 = cm->conf.ipv4;
+		mpt.dst_addr.family = AF_INET;
+		mpt.dst_addr.ipv4 = sink->endpoint.ip46.s6_addr32[3];
 	}
+	else {
+		mpt.src_addr.family = AF_INET6;
+		memcpy(mpt.src_addr.ipv6, &cm->conf.ipv6, sizeof(mpt.src_addr.ipv6));
+		mpt.dst_addr.family = AF_INET6;
+		memcpy(mpt.dst_addr.ipv6, &sink->endpoint.ip46, sizeof(mpt.src_addr.ipv6));
+	}
+
+	stream->handler->kernel_decrypt(&mpt.decrypt, stream);
+	stream->handler->kernel_encrypt(&mpt.encrypt, stream);
+
+	if (!mpt.encrypt.cipher || !mpt.encrypt.hmac)
+		goto no_kernel;
+	if (!mpt.decrypt.cipher || !mpt.decrypt.hmac)
+		goto no_kernel;
+
+	ZERO(stream->kernel_stats);
+
+	kernel_add_stream(cm->conf.kernelfd, &mpt, 0);
+	
+no_kernel:
+	stream->kernelized = 1;
+	stream->no_kernel_support = 1;
 }
 
 
 
 
 /* returns: 0 = not a muxed stream, 1 = muxed, RTP, 2 = muxed, RTCP */
-static int rtcp_demux(str *s, struct streamrelay *r) {
+static int rtcp_demux(str *s, struct packet_stream *stream) {
 	if (r->idx != 0)
 		return 0;
 	if (!r->rtcp_mux)
@@ -308,36 +304,36 @@ static int rtcp_demux(str *s, struct streamrelay *r) {
 	return rtcp_demux_is_rtcp(s) ? 2 : 1;
 }
 
-static int call_avpf2avp_rtcp(str *s, struct streamrelay *r) {
+static int call_avpf2avp_rtcp(str *s, struct packet_stream *stream) {
 	return rtcp_avpf2avp(s);
 }
-static int call_avp2savp_rtp(str *s, struct streamrelay *r) {
+static int call_avp2savp_rtp(str *s, struct packet_stream *stream) {
 	return rtp_avp2savp(s, &r->other->crypto.out);
 }
-static int call_avp2savp_rtcp(str *s, struct streamrelay *r) {
+static int call_avp2savp_rtcp(str *s, struct packet_stream *stream) {
 	return rtcp_avp2savp(s, &r->other->crypto.out);
 }
-static int call_savp2avp_rtp(str *s, struct streamrelay *r) {
+static int call_savp2avp_rtp(str *s, struct packet_stream *stream) {
 	return rtp_savp2avp(s, &r->crypto.in);
 }
-static int call_savp2avp_rtcp(str *s, struct streamrelay *r) {
+static int call_savp2avp_rtcp(str *s, struct packet_stream *stream) {
 	return rtcp_savp2avp(s, &r->crypto.in);
 }
-static int call_avpf2savp_rtcp(str *s, struct streamrelay *r) {
+static int call_avpf2savp_rtcp(str *s, struct packet_stream *stream) {
 	int ret;
 	ret = rtcp_avpf2avp(s);
 	if (ret < 0)
 		return ret;
 	return rtcp_avp2savp(s, &r->other->crypto.out);
 }
-static int call_savpf2avp_rtcp(str *s, struct streamrelay *r) {
+static int call_savpf2avp_rtcp(str *s, struct packet_stream *stream) {
 	int ret;
 	ret = rtcp_savp2avp(s, &r->crypto.in);
 	if (ret < 0)
 		return ret;
 	return rtcp_avpf2avp(s);
 }
-static int call_savpf2savp_rtcp(str *s, struct streamrelay *r) {
+static int call_savpf2savp_rtcp(str *s, struct packet_stream *stream) {
 	int ret;
 	ret = rtcp_savp2avp(s, &r->crypto.in);
 	if (ret < 0)
@@ -349,7 +345,7 @@ static int call_savpf2savp_rtcp(str *s, struct streamrelay *r) {
 }
 
 
-static int __k_null(struct mediaproxy_srtp *s, struct streamrelay *r) {
+static int __k_null(struct mediaproxy_srtp *s, struct packet_stream *stream) {
 	*s = __mps_null;
 	return 0;
 }
@@ -366,14 +362,14 @@ static int __k_srtp_crypt(struct mediaproxy_srtp *s, struct crypto_context *c) {
 	memcpy(s->master_salt, c->master_salt, c->crypto_suite->master_salt_len);
 	return 0;
 }
-static int __k_srtp_encrypt(struct mediaproxy_srtp *s, struct streamrelay *r) {
+static int __k_srtp_encrypt(struct mediaproxy_srtp *s, struct packet_stream *stream) {
 	return __k_srtp_crypt(s, &r->other->crypto.out);
 }
-static int __k_srtp_decrypt(struct mediaproxy_srtp *s, struct streamrelay *r) {
+static int __k_srtp_decrypt(struct mediaproxy_srtp *s, struct packet_stream *stream) {
 	return __k_srtp_crypt(s, &r->crypto.in);
 }
 
-static const struct streamhandler *determine_handler_rtp(struct streamrelay *in) {
+static const struct streamhandler *determine_handler_rtp(struct packet_stream *in) {
 	switch (in->peer.protocol) {
 		case PROTO_RTP_AVP:
 		case PROTO_RTP_AVPF:
@@ -409,7 +405,7 @@ static const struct streamhandler *determine_handler_rtp(struct streamrelay *in)
 			abort();
 	}
 }
-static const struct streamhandler *determine_handler_rtcp(struct streamrelay *in) {
+static const struct streamhandler *determine_handler_rtcp(struct packet_stream *in) {
 	switch (in->peer.protocol) {
 		case PROTO_RTP_AVP:
 			switch (in->peer_advertised.protocol) {
@@ -471,7 +467,7 @@ static const struct streamhandler *determine_handler_rtcp(struct streamrelay *in
 			abort();
 	}
 }
-static void determine_handler(struct streamrelay *in) {
+static void determine_handler(struct packet_stream *in) {
 	const struct streamhandler *ret;
 
 	if (in->handler)
@@ -501,7 +497,9 @@ dummy:
 }
 
 /* called with r->up (== cs) locked */
-static int stream_packet(struct streamrelay *sr_incoming, str *s, struct sockaddr_in6 *fsin) {
+static int stream_packet(struct packet_stream *stream, str *s, struct sockaddr_in6 *fsin) {
+	struct packet_stream *sink;
+	struct call_media *media;
 	struct streamrelay *sr_outgoing, *sr_out_rtcp, *sr_in_rtcp;
 	struct peer *p_incoming, *p_outgoing;
 	struct callstream *cs_incoming;
@@ -513,19 +511,21 @@ static int stream_packet(struct streamrelay *sr_incoming, str *s, struct sockadd
 	struct cmsghdr *ch;
 	struct in_pktinfo *pi;
 	struct in6_pktinfo *pi6;
-	struct call *c;
-	struct callmaster *m;
+	struct call *call;
+	struct callmaster *cm;
 	unsigned char cc;
 	char addr[64];
 	struct stream s_copy;
 
-	p_incoming = sr_incoming->up;
-	cs_incoming = p_incoming->up;
-	p_outgoing = p_incoming->other;
-	sr_outgoing = sr_incoming->other;
-	c = cs_incoming->call;
-	m = c->callmaster;
+	media = stream->media;
+	call = stream->call;
+	cm = call->callmaster;
 	smart_ntop_port(addr, fsin, sizeof(addr));
+
+	if (!media || !call)
+		return;
+
+	sink = stream->rtp_sink;
 
 	if (sr_incoming->stun && is_stun(s)) {
 		stun_ret = stun(s, sr_incoming, fsin);
@@ -696,8 +696,7 @@ out:
 
 
 static void stream_readable(int fd, void *p, uintptr_t u) {
-	struct callstream *cs = p;
-	struct streamrelay *r;
+	struct packet_stream *stream = p;
 	char buf[RTP_BUFFER_SIZE];
 	int ret;
 	struct sockaddr_storage ss;
@@ -709,9 +708,7 @@ static void stream_readable(int fd, void *p, uintptr_t u) {
 	struct call *ca;
 	str s;
 
-	mutex_lock(&cs->lock);
-	r = &cs->peers[u >> 1].rtps[u & 1];
-	if (r->fd.fd != fd)
+	if (stream->fd.fd != fd)
 		goto out;
 
 	for (;;) {
@@ -724,8 +721,7 @@ static void stream_readable(int fd, void *p, uintptr_t u) {
 				continue;
 			if (errno == EAGAIN || errno == EWOULDBLOCK)
 				break;
-			mutex_unlock(&cs->lock);
-			stream_closed(fd, r, 0);
+			stream_closed(fd, stream, 0);
 			return;
 		}
 		if (ret >= MAX_RTP_PACKET_SIZE)
@@ -754,8 +750,7 @@ static void stream_readable(int fd, void *p, uintptr_t u) {
 	}
 
 out:
-	ca = cs->call;
-	mutex_unlock(&cs->lock);
+	ca = stream->call;
 
 	if (update)
 		redis_update(ca, ca->callmaster->conf.redis);
@@ -1333,143 +1328,7 @@ static int setup_peer(struct peer *p, struct stream_input *s, const str *tag) {
 	return 0;
 }
 
-/* caller is responsible for appropriate locking */
-static void steal_peer(struct peer *dest, struct peer *src) {
-	struct streamrelay *r;
-	int i;
-	struct poller_item pi;
-	struct streamrelay *sr, *srs;
-	struct call *c;
-	struct callmaster *m;
-	struct poller *po;
 
-	ZERO(pi);
-	r = &src->rtps[0];
-	c = src->up->call;
-	m = c->callmaster;
-	po = m->poller;
-
-	mylog(LOG_DEBUG, LOG_PREFIX_CI "Re-using existing open RTP port %u", 
-		LOG_PARAMS_CI(c), r->fd.localport);
-
-	dest->confirmed = 0;
-	unkernelize(dest);
-	src->confirmed = 0;
-	unkernelize(src);
-
-	dest->filled = src->filled;
-	dest->tag = src->tag;
-	src->tag = STR_NULL;
-	dest->desired_family = src->desired_family;
-	dest->ice_ufrag = src->ice_ufrag;
-	dest->ice_pwd = src->ice_pwd;
-
-	for (i = 0; i < 2; i++) {
-		sr = &dest->rtps[i];
-		srs = &src->rtps[i];
-
-		if (sr->fd.fd != -1) {
-			mylog(LOG_DEBUG, LOG_PREFIX_CI "Closing port %u in favor of re-use", 
-				LOG_PARAMS_CI(c), sr->fd.localport);
-			poller_del_item(po, sr->fd.fd);
-			release_port(&sr->fd, m);
-		}
-
-		sr->fd = srs->fd;
-		sr->peer = srs->peer;
-		sr->peer_advertised = srs->peer_advertised;
-		sr->stun = srs->stun;
-		sr->rtcp = srs->rtcp;
-		sr->rtcp_mux = srs->rtcp_mux;
-		crypto_context_move(&sr->other->crypto.in, &srs->other->crypto.in);
-		crypto_context_move(&sr->crypto.out, &srs->crypto.out);
-
-
-		srs->fd.fd = -1;
-		srs->fd.localport = 0;
-		ZERO(srs->peer);
-		ZERO(srs->peer_advertised);
-
-		pi.fd = sr->fd.fd;
-		pi.obj = &sr->up->up->obj;
-		pi.uintp = i | (dest->idx << 1);
-		pi.readable = stream_readable;
-		pi.closed = stream_closed;
-
-		poller_update_item(po, &pi);
-	}
-}
-
-
-void callstream_init(struct callstream *s, struct relays_cache *rc) {
-	int i, j;
-	struct peer *p;
-	struct streamrelay *r;
-	struct udp_fd *relay_AB;
-	struct poller_item pi;
-	struct call *c = s->call;
-	struct poller *po = c->callmaster->poller;
-
-	ZERO(pi);
-
-	for (i = 0; i < 2; i++) {
-		p = &s->peers[i];
-		relay_AB = rc ? rc->array_ptrs[i] : NULL;
-
-		p->idx = i;
-		p->up = s;
-		p->other = &s->peers[i ^ 1];
-		p->tag = STR_NULL;
-
-		for (j = 0; j < 2; j++) {
-			r = &p->rtps[j];
-
-			r->fd.fd = -1;
-			r->idx = j;
-			r->up = p;
-			r->other = &p->other->rtps[j];
-			r->last = poller_now;
-
-			if (relay_AB && relay_AB[j].fd != -1) {
-				r->fd = relay_AB[j];
-
-				pi.fd = r->fd.fd;
-				pi.obj = &s->obj;
-				pi.uintp = (i << 1) | j;
-				pi.readable = stream_readable;
-				pi.closed = stream_closed;
-
-				poller_add_item(po, &pi);
-
-				relay_AB[j].fd = -1;
-			}
-		}
-	}
-
-	if (rc)
-		relays_cache_port_used(rc);
-}
-
-
-
-static void callstream_free(void *ptr) {
-	struct callstream *s = ptr;
-	struct callmaster *m = s->call->callmaster;
-	int i, j;       
-	struct peer *p;
-	struct streamrelay *r;
-
-	for (i = 0; i < 2; i++) {
-		p = &s->peers[i];
-
-		for (j = 0; j < 2; j++) {
-			r = &p->rtps[j];
-			release_port(&r->fd, m);
-		}
-	}
-	mutex_destroy(&s->lock);
-	obj_put(s->call);
-}
 
 static struct call_media *__get_media(struct call_monologue *ml, GList **it, const struct stream_params *sp) {
 	struct call_media *med;
@@ -1502,6 +1361,9 @@ static struct call_media *__get_media(struct call_monologue *ml, GList **it, con
 
 static void stream_free(void *p) {
 	struct packet_stream *s = p;
+	struct callmaster *m = s->call->callmaster;
+
+	release_port(&s->fd, m);
 
 	obj_put(s->call);
 }
@@ -1511,6 +1373,8 @@ static int __num_media_streams(struct call_media *media, unsigned int num_ports)
 	struct packet_stream *stream;
 	struct call *call = media->call;
 	unsigned int i;
+	struct poller_item pi;
+	struct poller *po = call->callmaster->poller;
 
 	if (media->streams.length >= num_ports)
 		return 0;
@@ -1523,27 +1387,38 @@ static int __num_media_streams(struct call_media *media, unsigned int num_ports)
 
 	for (i = 0; i < num_ports; i++) {
 		stream = obj_alloc0("packet_stream", sizeof(*stream), stream_free);
+		mutex_init(&stream->lock);
 		stream->call = obj_get(call);
 		stream->media = media;
 		stream->fd = fd_arr[i];
 		g_queue_push_tail(&media->streams, stream);
 		call->streams = g_list_prepend(call->streams, stream);
+
+		pi.fd = stream->fd;
+		pi.obj = &stream->obj;
+		pi.readable = stream_readable;
+		pi.closed = stream_closed;
+
+		poller_add_item(po, &pi);
 	}
 
 	return 0;
 }
 
 static struct packet_stream *__get_stream(struct call_media *media, GList **iter) {
+	struct packet_stream *s;
+
 	if (!*iter)
 		*iter = media->streams.head;
 	else
 		*iter = (*iter)->next;
 
-	return (*iter)->data;
+	s = (*iter)->data;
+	return s;
 }
 
 /* called with call->master_lock held */
-static int monologue_offer(struct call_monologue *monologue, GQueue *streams) {
+static int monologue_offer_answer(struct call_monologue *monologue, GQueue *streams) {
 	struct stream_params *sp;
 	GList *ml_media, *other_ml_media, *iter, *other_iter;
 	struct call_media *media, *other_media;
@@ -1566,6 +1441,11 @@ static int monologue_offer(struct call_monologue *monologue, GQueue *streams) {
 		 * the dialogue */
 		media = __get_media(monologue, &ml_media, sp);
 		other_media = __get_media(other_ml, &other_ml_media, sp);
+		/* THIS side corresponds to what's being sent to the recipient of the
+		 * offer/answer. The OTHER side corresponds to what WILL BE sent to the
+		 * offerer or WAS sent to the answerer. */
+
+		other_media->rtcp_mux = sp->rtcp_mux;
 
 		/* determine number of consecutive ports needed locally. we don't
 		 * multiplex on our side by default.
@@ -1588,7 +1468,7 @@ static int monologue_offer(struct call_monologue *monologue, GQueue *streams) {
 		while (iter) {
 			stream = iter->data;
 
-			if (!(i & 1)) {
+			if (!(i & 1) || media->rtcp_mux) {
 				/* RTP */
 				other_stream = __get_stream(other_media, &other_item);
 
@@ -1598,12 +1478,16 @@ static int monologue_offer(struct call_monologue *monologue, GQueue *streams) {
 				other_stream->endpoint = sp->rtp_endpoint;
 				other_stream->advertised_endpoint = other_stream->endpoint;
 
+				/* only possible in answer (?) - saved from offer */
+				if (media->rtcp_mux)
+					goto rtcp;
+
 				goto next;
 			}
 
+rtcp:
 			/* RTCP */
 			stream->rtcp = 1;
-			stream->implicit_rtcp = 1;
 
 			if (sp->rtcp_mux) {
 				assert(other_stream != NULL);
@@ -1842,22 +1726,16 @@ skip:
 
 
 
-static void unkernelize(struct peer *p) {
+static void unkernelize(struct packet_stream *p) {
 	struct streamrelay *r;
 	int i;
 
 	if (!p->kernelized)
 		return;
+	if (p->no_kernel_support)
+		return;
 
-	for (i = 0; i < 2; i++) {
-		if (!p->kernelized)
-			continue;
-		r = &p->rtps[i];
-		if (r->no_kernel_support)
-			continue;
-		kernel_del_stream(p->up->call->callmaster->conf.kernelfd, r->fd.localport);
-		r->no_kernel_support = 0;
-	}
+	kernel_del_stream(p->call->callmaster->conf.kernelfd, r->fd.localport);
 
 	p->kernelized = 0;
 }
@@ -2197,13 +2075,34 @@ static void __monologue_tag(struct call_monologue *ml, const str *tag) {
 	g_hash_table_insert(call->tags, &ml->tag, ret);
 }
 
+static void __monologue_unkernelize(struct call_monologue *monologue) {
+	GList *l, *m;
+	struct call_media *media;
+	struct packet_stream *stream;
+
+	if (!monologue)
+		return;
+
+	for (l = monologue->medias.head; l; l = l->next) {
+		media = l->data;
+
+		for (m = media->streams.head; m; m = m->next) {
+			stream = m->data;
+			unkernelize(stream);
+		}
+	}
+}
+
 /* must be called with call->master_lock held */
 static struct call_monologue *call_get_monologue(struct call *call, const str *fromtag) {
 	struct call_monologue *ret;
 
 	ret = g_hash_table_lookup(call->tags, fromtag);
-	if (ret)
+	if (ret) {
+		__monologue_unkernelize(ret);
+		__monologue_unkernelize(ret->active_dialogue);
 		return ret;
+	}
 
 	ret = __monologue_create(call);
 	__monologue_tag(ret, fromtag);
@@ -2220,20 +2119,27 @@ static struct call_monologue *call_get_dialogue(struct call *call, const str *fr
 
 	/* if the to-tag is known already, return that */
 	ret = g_hash_table_lookup(call->tags, totag);
-	if (ret)
+	if (ret) {
+		__monologue_unkernelize(ret);
+		__monologue_unkernelize(ret->active_dialogue);
 		return ret;
+	}
 
 	/* otherwise, at least the from-tag has to be known. it's an error if it isn't */
 	ft = g_hash_table_lookup(call->tags, fromtag);
 	if (!ft)
 		return NULL;
 
+	__monologue_unkernelize(ft);
+
 	/* check for a half-complete dialogue and fill in the missing half if possible */
 	ret = ft->active_dialogue;
+	__monologue_unkernelize(ret);
+
 	if (!ret->tag.s)
 		goto tag;
 
-	/* this is a second dialogue created from a single from-tag */
+	/* this is an additional dialogue created from a single from-tag */
 	ret = __monologue_create(call);
 
 tag:
@@ -2242,6 +2148,7 @@ tag:
 	g_hash_table_insert(ft->other_tags, &ret->tag, ret);
 	ret->active_dialogue = ft;
 	ft->active_dialogue = ret;
+	/* XXX possible asymmetric dialogue? */
 
 	return ret;
 }
