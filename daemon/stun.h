@@ -29,7 +29,7 @@ static inline int is_stun(str *s) {
 }
 
 
-int stun(str *, struct streamrelay *, struct sockaddr_in6 *);
+int stun(str *, struct packet_stream *, struct sockaddr_in6 *);
 
 
 #endif

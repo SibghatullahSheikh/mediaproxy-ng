@@ -409,7 +409,7 @@ static inline int u_int16_t_arr_len(u_int16_t *arr) {
  * -1 = stun packet not processed, processing should continue as non-stun packet
  * 1  = stun packet processed and "use candidate" was set
  */
-int stun(str *b, struct streamrelay *sr, struct sockaddr_in6 *sin) {
+int stun(str *b, struct packet_stream *sr, struct sockaddr_in6 *sin) {
 	struct header *req = (void *) b->s;
 	int msglen, method, class;
 	str attr_str;

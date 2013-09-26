@@ -221,7 +221,7 @@ static void stream_closed(int fd, void *p, uintptr_t u) {
 
 
 
-/* called with stream->lock held */
+/* called with stream and stream->*_sink locked */
 void kernelize(struct packet_stream *stream) {
 	struct mediaproxy_target_info mpt;
 	struct call *call = stream->call;
@@ -276,7 +276,7 @@ void kernelize(struct packet_stream *stream) {
 	}
 
 	stream->handler->kernel_decrypt(&mpt.decrypt, stream);
-	stream->handler->kernel_encrypt(&mpt.encrypt, stream);
+	stream->handler->kernel_encrypt(&mpt.encrypt, sink);
 
 	if (!mpt.encrypt.cipher || !mpt.encrypt.hmac)
 		goto no_kernel;
@@ -296,10 +296,8 @@ no_kernel:
 
 
 /* returns: 0 = not a muxed stream, 1 = muxed, RTP, 2 = muxed, RTCP */
-static int rtcp_demux(str *s, struct packet_stream *stream) {
-	if (r->idx != 0)
-		return 0;
-	if (!r->rtcp_mux)
+static int rtcp_demux(str *s, struct call_media *media) {
+	if (!media->rtcp_mux)
 		return 0;
 	return rtcp_demux_is_rtcp(s) ? 2 : 1;
 }
@@ -363,10 +361,10 @@ static int __k_srtp_crypt(struct mediaproxy_srtp *s, struct crypto_context *c) {
 	return 0;
 }
 static int __k_srtp_encrypt(struct mediaproxy_srtp *s, struct packet_stream *stream) {
-	return __k_srtp_crypt(s, &r->other->crypto.out);
+	return __k_srtp_crypt(s, &stream->crypto.out);
 }
 static int __k_srtp_decrypt(struct mediaproxy_srtp *s, struct packet_stream *stream) {
-	return __k_srtp_crypt(s, &r->crypto.in);
+	return __k_srtp_crypt(s, &stream->crypto.in);
 }
 
 static const struct streamhandler *determine_handler_rtp(struct packet_stream *in) {
@@ -496,13 +494,10 @@ dummy:
 	in->handler = &__sh_noop;
 }
 
-/* called with r->up (== cs) locked */
+/* called with stream and stream->*_sink locked */
 static int stream_packet(struct packet_stream *stream, str *s, struct sockaddr_in6 *fsin) {
 	struct packet_stream *sink;
 	struct call_media *media;
-	struct streamrelay *sr_outgoing, *sr_out_rtcp, *sr_in_rtcp;
-	struct peer *p_incoming, *p_outgoing;
-	struct callstream *cs_incoming;
 	int ret, update = 0, stun_ret = 0, handler_ret = 0, muxed_rtcp = 0;
 	struct sockaddr_in6 sin6;
 	struct msghdr mh;
@@ -513,9 +508,9 @@ static int stream_packet(struct packet_stream *stream, str *s, struct sockaddr_i
 	struct in6_pktinfo *pi6;
 	struct call *call;
 	struct callmaster *cm;
-	unsigned char cc;
+	/*unsigned char cc;*/
 	char addr[64];
-	struct stream s_copy;
+	struct endpoint endpoint;
 
 	media = stream->media;
 	call = stream->call;
@@ -523,12 +518,11 @@ static int stream_packet(struct packet_stream *stream, str *s, struct sockaddr_i
 	smart_ntop_port(addr, fsin, sizeof(addr));
 
 	if (!media || !call)
-		return;
+		return 0;
+	/* XXX check send/receive flags */
 
-	sink = stream->rtp_sink;
-
-	if (sr_incoming->stun && is_stun(s)) {
-		stun_ret = stun(s, sr_incoming, fsin);
+	if (stream->stun && is_stun(s)) {
+		stun_ret = stun(s, stream, fsin);
 		if (!stun_ret)
 			return 0;
 		if (stun_ret == 1) /* use candidate */
@@ -537,24 +531,26 @@ static int stream_packet(struct packet_stream *stream, str *s, struct sockaddr_i
 			stun_ret = 0;
 	}
 
-	if (sr_outgoing->fd.fd == -1) {
+	sink = stream->rtp_sink;
+	if (!sink && stream->rtcp)
+		sink = stream->rtcp_sink;
+	muxed_rtcp = rtcp_demux(s, media);
+	if (muxed_rtcp == 2)
+		sink = stream->rtcp_sink;
+
+	if (!sink || sink->fd.fd == -1) {
 		mylog(LOG_WARNING, LOG_PREFIX_C "RTP packet to port %u discarded from %s", 
-			LOG_PARAMS_C(c), sr_incoming->fd.localport, addr);
-		sr_incoming->stats.errors++;
-		mutex_lock(&m->statspslock);
-		m->statsps.errors++;
-		mutex_unlock(&m->statspslock);
+			LOG_PARAMS_C(call), stream->fd.localport, addr);
+		stream->stats.errors++;
+		mutex_lock(&cm->statspslock);
+		cm->statsps.errors++;
+		mutex_unlock(&cm->statspslock);
 		return 0;
 	}
 
-	sr_in_rtcp = sr_incoming;
-	muxed_rtcp = rtcp_demux(s, sr_incoming);
-	if (muxed_rtcp == 2)
-		sr_in_rtcp = &p_incoming->rtps[1];
-
-	determine_handler(sr_in_rtcp);
-	if (sr_in_rtcp->handler->rewrite)
-		handler_ret = sr_in_rtcp->handler->rewrite(s, sr_in_rtcp);
+	determine_handler(stream);
+	if (stream->handler->rewrite)
+		handler_ret = stream->handler->rewrite(s, stream);
 		/* return values are: 0 = forward packet, -1 = error/dont forward,
 		 * 1 = forward and push update to redis */
 
@@ -562,64 +558,55 @@ static int stream_packet(struct packet_stream *stream, str *s, struct sockaddr_i
 		update = 1;
 
 use_cand:
-	if (!p_incoming->filled || sr_incoming->idx != 0)
+	if (!stream->filled)
 		goto forward;
 
-	if (p_incoming->confirmed)
+	if (media->asynchronous)
+		stream->confirmed = 1;
+
+	if (stream->confirmed)
 		goto kernel_check;
 
-	if (!c->lookup_done || poller_now <= c->lookup_done + 3)
+	/* XXX locking? */
+	if (!call->last_signal || poller_now <= call->last_signal + 3)
 		goto peerinfo;
 
 	mylog(LOG_DEBUG, LOG_PREFIX_C "Confirmed peer information for port %u - %s", 
-		LOG_PARAMS_C(c), sr_incoming->fd.localport, addr);
+		LOG_PARAMS_C(call), stream->fd.localport, addr);
 
-	p_incoming->confirmed = 1;
+	stream->confirmed = 1;
 	update = 1;
 
 peerinfo:
-	if (!stun_ret && !p_incoming->codec && s->len >= 2) {
+	/*
+	if (!stun_ret && !stream->codec && s->len >= 2) {
 		cc = s->s[1];
 		cc &= 0x7f;
 		if (cc < G_N_ELEMENTS(rtp_codecs))
-			p_incoming->codec = rtp_codecs[cc] ? : "unknown";
+			stream->codec = rtp_codecs[cc] ? : "unknown";
 		else
-			p_incoming->codec = "unknown";
+			stream->codec = "unknown";
 	}
+	*/
 
-	sr_out_rtcp = &p_outgoing->rtps[1]; /* sr_incoming->idx == 0 */
-	s_copy = sr_outgoing->peer;
-	sr_outgoing->peer.ip46 = fsin->sin6_addr;
-	sr_outgoing->peer.port = ntohs(fsin->sin6_port);
-	if (memcmp(&s_copy, &sr_outgoing->peer, sizeof(s_copy))) {
-		sr_out_rtcp->peer.ip46 = sr_outgoing->peer.ip46;
-		sr_out_rtcp->peer.port = sr_outgoing->peer.port + 1; /* sr_out_rtcp->idx == 1 */
+	endpoint = stream->endpoint;
+	stream->endpoint.ip46 = fsin->sin6_addr;
+	stream->endpoint.port = ntohs(fsin->sin6_port);
+	if (memcmp(&endpoint, &stream->endpoint, sizeof(endpoint)))
 		update = 1;
-	}
 
 kernel_check:
-	if (sr_incoming->no_kernel_support)
+	if (stream->no_kernel_support)
 		goto forward;
 
-	if (p_incoming->confirmed && p_outgoing->confirmed && p_outgoing->filled)
-		kernelize(cs_incoming);
+	if (stream->confirmed && sink->confirmed && sink->filled)
+		kernelize(stream);
 
 forward:
-	if (is_addr_unspecified(&sr_incoming->peer_advertised.ip46)
-			|| !sr_incoming->peer_advertised.port
+	if (is_addr_unspecified(&sink->advertised_endpoint.ip46)
+			|| !sink->advertised_endpoint.port
 			|| stun_ret || handler_ret < 0)
 		goto drop;
-
-	if (muxed_rtcp == 2) {
-		/* demux */
-		sr_incoming = sr_in_rtcp;
-		sr_outgoing = sr_incoming->other;
-	}
-	else if (sr_incoming->idx == 1 && sr_outgoing->rtcp_mux) {
-		/* mux */
-		sr_incoming = &p_incoming->rtps[0];
-		sr_outgoing = sr_incoming->other;
-	}
 
 	ZERO(mh);
 	mh.msg_control = buf;
@@ -630,8 +617,8 @@ forward:
 
 	ZERO(sin6);
 	sin6.sin6_family = AF_INET6;
-	sin6.sin6_addr = sr_incoming->peer.ip46;
-	sin6.sin6_port = htons(sr_incoming->peer.port);
+	sin6.sin6_addr = sink->endpoint.ip46;
+	sin6.sin6_port = htons(sink->endpoint.port);
 	mh.msg_name = &sin6;
 	mh.msg_namelen = sizeof(sin6);
 
@@ -642,7 +629,7 @@ forward:
 
 		pi = (void *) CMSG_DATA(ch);
 		ZERO(*pi);
-		pi->ipi_spec_dst.s_addr = m->conf.ipv4;
+		pi->ipi_spec_dst.s_addr = cm->conf.ipv4;
 
 		mh.msg_controllen = CMSG_SPACE(sizeof(*pi));
 	}
@@ -653,7 +640,7 @@ forward:
 
 		pi6 = (void *) CMSG_DATA(ch);
 		ZERO(*pi6);
-		pi6->ipi6_addr = m->conf.ipv6;
+		pi6->ipi6_addr = cm->conf.ipv6;
 
 		mh.msg_controllen = CMSG_SPACE(sizeof(*pi6));
 	}
@@ -665,31 +652,57 @@ forward:
 	mh.msg_iov = &iov;
 	mh.msg_iovlen = 1;
 
-	ret = sendmsg(sr_outgoing->fd.fd, &mh, 0);
+	ret = sendmsg(sink->fd.fd, &mh, 0);
 
 	if (ret == -1) {
-		sr_incoming->stats.errors++;
-		mutex_lock(&m->statspslock);
-		m->statsps.errors++;
-		mutex_unlock(&m->statspslock);
+		stream->stats.errors++;
+		mutex_lock(&cm->statspslock);
+		cm->statsps.errors++;
+		mutex_unlock(&cm->statspslock);
 		goto out;
 	}
 
 drop:
 	ret = 0;
-	sr_incoming->stats.packets++;
-	sr_incoming->stats.bytes += s->len;
-	sr_incoming->last = poller_now;
-	mutex_lock(&m->statspslock);
-	m->statsps.packets++;
-	m->statsps.bytes += s->len;
-	mutex_unlock(&m->statspslock);
+	stream->stats.packets++;
+	stream->stats.bytes += s->len;
+	stream->last_packet = poller_now;
+	mutex_lock(&cm->statspslock);
+	cm->statsps.packets++;
+	cm->statsps.bytes += s->len;
+	mutex_unlock(&cm->statspslock);
 
 out:
 	if (ret == 0 && update)
 		ret = 1;
 
 	return ret;
+}
+
+
+
+
+/* lock this stream and all of its sinks */
+static void stream_lock_all(struct packet_stream *stream) {
+retry:
+	mutex_lock(&stream->lock);
+	if (stream->rtp_sink && mutex_trylock(&stream->rtp_sink->lock)) {
+		mutex_unlock(&stream->lock);
+		goto retry;
+	}
+	if (stream->rtcp_sink && mutex_trylock(&stream->rtcp_sink->lock)) {
+		if (stream->rtp_sink)
+			mutex_unlock(&stream->rtp_sink->lock);
+		mutex_unlock(&stream->lock);
+		goto retry;
+	}
+}
+static void stream_unlock_all(struct packet_stream *stream) {
+	mutex_unlock(&stream->lock);
+	if (stream->rtp_sink)
+		mutex_unlock(&stream->rtp_sink->lock);
+	if (stream->rtcp_sink)
+		mutex_unlock(&stream->rtcp_sink->lock);
 }
 
 
@@ -708,6 +721,8 @@ static void stream_readable(int fd, void *p, uintptr_t u) {
 	struct call *ca;
 	str s;
 
+	stream_lock_all(stream);
+
 	if (stream->fd.fd != fd)
 		goto out;
 
@@ -721,6 +736,7 @@ static void stream_readable(int fd, void *p, uintptr_t u) {
 				continue;
 			if (errno == EAGAIN || errno == EWOULDBLOCK)
 				break;
+			stream_unlock_all(stream);
 			stream_closed(fd, stream, 0);
 			return;
 		}
@@ -738,11 +754,11 @@ static void stream_readable(int fd, void *p, uintptr_t u) {
 		}
 
 		str_init_len(&s, buf + RTP_BUFFER_HEAD_ROOM, ret);
-		ret = stream_packet(r, &s, sinp);
+		ret = stream_packet(stream, &s, sinp);
 		if (ret == -1) {
 			mylog(LOG_WARNING, "Write error on RTP socket");
-			mutex_unlock(&cs->lock);
-			call_destroy(cs->call);
+			stream_unlock_all(stream);
+			call_destroy(stream->call);
 			return;
 		}
 		if (ret == 1)
@@ -750,10 +766,13 @@ static void stream_readable(int fd, void *p, uintptr_t u) {
 	}
 
 out:
-	ca = stream->call;
+	ca = stream->call ? obj_get(stream->call) : NULL;
+	stream_unlock_all(stream);
 
-	if (update)
-		redis_update(ca, ca->callmaster->conf.redis);
+	if (ca && update)
+		redis_update(ca, stream->call->callmaster->conf.redis);
+	if (ca)
+		obj_put(ca);
 }
 
 
@@ -1765,10 +1784,14 @@ static void kill_callstream(struct callstream *s) {
 }
 
 static void call_destroy(struct call *c) {
-	struct callmaster *m = c->callmaster;
+	struct callmaster *m;
 	struct callstream *s;
 	int ret;
 
+	if (!c)
+		return;
+
+	m = c->callmaster;
 	rwlock_lock_w(&m->hashlock);
 	ret = g_hash_table_remove(m->callhash, &c->callid);
 	rwlock_unlock_w(&m->hashlock);
