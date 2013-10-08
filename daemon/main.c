@@ -349,6 +349,7 @@ void redis_mod_verify(void *dlh) {
 	dlresolve(redis_delete);
 	dlresolve(redis_wipe);
 
+	/*
 	check_struct_size(call);
 	check_struct_size(callstream);
 	check_struct_size(crypto_suite);
@@ -377,6 +378,7 @@ void redis_mod_verify(void *dlh) {
 	check_struct_offset(stream, ip46);
 	check_struct_offset(stream, num);
 	check_struct_offset(stream, protocol);
+	*/
 }
 
 void create_everything(struct main_context *ctx) {

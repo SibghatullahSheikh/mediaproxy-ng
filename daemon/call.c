@@ -50,6 +50,8 @@ static __thread const str *log_info;
 
 
 
+typedef int (*rewrite_func)(str *, struct packet_stream *);
+
 /* also serves as array index for callstream->peers[] */
 struct iterator_helper {
 	GSList			*del;
@@ -91,10 +93,14 @@ struct call_stats {
 	struct stats	totals[4]; /* rtp in, rtcp in, rtp out, rtcp out */
 };
 
+struct streamhandler_io {
+	rewrite_func	rtp;
+	rewrite_func	rtcp;
+	int		(*kernel)(struct mediaproxy_srtp *, struct packet_stream *);
+};
 struct streamhandler {
-	int		(*rewrite)(str *, struct packet_stream *);
-	int		(*kernel_decrypt)(struct mediaproxy_srtp *, struct packet_stream *);
-	int		(*kernel_encrypt)(struct mediaproxy_srtp *, struct packet_stream *);
+	const struct streamhandler_io	*in;
+	const struct streamhandler_io	*out;
 };
 
 static char *rtp_codecs[] = {
@@ -131,7 +137,7 @@ const char *transport_protocol_strings[__PROTO_LAST] = {
 
 
 
-static void determine_handler(struct packet_stream *in);
+static void determine_handler(struct packet_stream *in, struct packet_stream *out);
 
 static int __k_null(struct mediaproxy_srtp *s, struct packet_stream *);
 static int __k_srtp_encrypt(struct mediaproxy_srtp *s, struct packet_stream *);
@@ -146,38 +152,94 @@ static int call_avpf2savp_rtcp(str *s, struct packet_stream *);
 static int call_savpf2avp_rtcp(str *s, struct packet_stream *);
 static int call_savpf2savp_rtcp(str *s, struct packet_stream *);
 
+
+/* ********** */
+
+static const struct streamhandler_io __shio_noop = {
+	.kernel		= __k_null,
+};
+static const struct streamhandler_io __shio_decrypt = {
+	.kernel		= __k_srtp_decrypt,
+	.rtp		= call_savp2avp_rtp,
+	.rtcp		= call_savp2avp_rtcp,
+};
+static const struct streamhandler_io __shio_encrypt = {
+	.kernel		= __k_srtp_encrypt,
+	.rtp		= call_avp2savp_rtp,
+	.rtcp		= call_avp2savp_rtcp,
+};
+static const struct streamhandler_io __shio_avpf_strip = {
+	.kernel		= __k_null,
+	.rtcp		= call_avpf2avp_rtcp,
+};
+static const struct streamhandler_io __shio_decrypt_avpf_strip = {
+	.kernel		= __k_srtp_decrypt,
+	.rtp		= call_savp2avp_rtp,
+	.rtcp		= call_savpf2avp_rtcp,
+};
+
+/* ********** */
+
 static const struct streamhandler __sh_noop = {
-	.kernel_decrypt		= __k_null,
-	.kernel_encrypt		= __k_null,
+	.in		= &__shio_noop,
+	.out		= &__shio_noop,
 };
-static const struct streamhandler __sh_rtp_avp2savp = {
-	.rewrite		= call_avp2savp_rtp,
-	.kernel_decrypt		= __k_null,
-	.kernel_encrypt		= __k_srtp_encrypt,
+static const struct streamhandler __sh_savp2avp = {
+	.in		= &__shio_decrypt,
+	.out		= &__shio_noop,
 };
-static const struct streamhandler __sh_rtp_savp2avp = {
-	.rewrite		= call_savp2avp_rtp,
-	.kernel_decrypt		= __k_srtp_decrypt,
-	.kernel_encrypt		= __k_null,
+static const struct streamhandler __sh_avp2savp = {
+	.in		= &__shio_noop,
+	.out		= &__shio_encrypt,
 };
-static const struct streamhandler __sh_rtcp_avp2savp = {
-	.rewrite		= call_avp2savp_rtcp,
+static const struct streamhandler __sh_avpf2avp = {
+	.in		= &__shio_avpf_strip,
+	.out		= &__shio_noop,
 };
-static const struct streamhandler __sh_rtcp_savp2avp = {
-	.rewrite		= call_savp2avp_rtcp,
+static const struct streamhandler __sh_avpf2savp = {
+	.in		= &__shio_avpf_strip,
+	.out		= &__shio_encrypt,
 };
-static const struct streamhandler __sh_rtcp_avpf2avp = {
-	.rewrite		= call_avpf2avp_rtcp,
+static const struct streamhandler __sh_savpf2avp = {
+	.in		= &__shio_decrypt_avpf_strip,
+	.out		= &__shio_noop,
 };
-static const struct streamhandler __sh_rtcp_avpf2savp = {
-	.rewrite		= call_avpf2savp_rtcp,
+static const struct streamhandler __sh_savpf2savp = {
+	.in		= &__shio_decrypt_avpf_strip,
+	.out		= &__shio_encrypt,
 };
-static const struct streamhandler __sh_rtcp_savpf2avp = {
-	.rewrite		= call_savpf2avp_rtcp,
+
+/* ********** */
+
+static const struct streamhandler *__sh_matrix_in_rtp_avp[__PROTO_LAST] = {
+	[PROTO_RTP_SAVP]	= &__sh_savp2avp,
+	[PROTO_RTP_SAVPF]	= &__sh_savp2avp,
 };
-static const struct streamhandler __sh_rtcp_savpf2savp = {
-	.rewrite		= call_savpf2savp_rtcp,
+static const struct streamhandler *__sh_matrix_in_rtp_avpf[__PROTO_LAST] = {
+	[PROTO_RTP_AVP]		= &__sh_avpf2avp,
+	[PROTO_RTP_SAVP]	= &__sh_avpf2savp,
+	[PROTO_RTP_SAVPF]	= &__sh_avp2savp,
 };
+static const struct streamhandler *__sh_matrix_in_rtp_savp[__PROTO_LAST] = {
+	[PROTO_RTP_AVP]		= &__sh_avp2savp,
+	[PROTO_RTP_AVPF]	= &__sh_avp2savp,
+};
+static const struct streamhandler *__sh_matrix_in_rtp_savpf[__PROTO_LAST] = {
+	[PROTO_RTP_AVP]		= &__sh_savpf2avp,
+	[PROTO_RTP_AVPF]	= &__sh_savp2avp,
+	[PROTO_RTP_SAVP]	= &__sh_savpf2avp,
+};
+
+/* ********** */
+
+static const struct streamhandler **__sh_matrix[__PROTO_LAST] = {
+	[PROTO_RTP_AVP]		= __sh_matrix_in_rtp_avp,
+	[PROTO_RTP_AVPF]	= __sh_matrix_in_rtp_avpf,
+	[PROTO_RTP_SAVP]	= __sh_matrix_in_rtp_savp,
+	[PROTO_RTP_SAVPF]	= __sh_matrix_in_rtp_savpf,
+};
+
+/* ********** */
 
 static const struct mediaproxy_srtp __mps_null = {
 	.cipher			= MPC_NULL,
@@ -247,13 +309,13 @@ void kernelize(struct packet_stream *stream) {
 
 	ZERO(mpt);
 
-	determine_handler(stream);
+	determine_handler(stream, sink);
 
 	if (is_addr_unspecified(&sink->advertised_endpoint.ip46)
 			|| !sink->advertised_endpoint.port)
 		goto no_kernel;
-	if (!stream->handler->kernel_decrypt
-			|| !stream->handler->kernel_encrypt)
+	if (!stream->handler->in->kernel
+			|| !stream->handler->out->kernel)
 		goto no_kernel;
 
 	mpt.target_port = stream->fd.localport;
@@ -275,8 +337,8 @@ void kernelize(struct packet_stream *stream) {
 		memcpy(mpt.dst_addr.ipv6, &sink->endpoint.ip46, sizeof(mpt.src_addr.ipv6));
 	}
 
-	stream->handler->kernel_decrypt(&mpt.decrypt, stream);
-	stream->handler->kernel_encrypt(&mpt.encrypt, sink);
+	stream->handler->in->kernel(&mpt.decrypt, stream);
+	stream->handler->out->kernel(&mpt.encrypt, sink);
 
 	if (!mpt.encrypt.cipher || !mpt.encrypt.hmac)
 		goto no_kernel;
@@ -306,40 +368,40 @@ static int call_avpf2avp_rtcp(str *s, struct packet_stream *stream) {
 	return rtcp_avpf2avp(s);
 }
 static int call_avp2savp_rtp(str *s, struct packet_stream *stream) {
-	return rtp_avp2savp(s, &r->other->crypto.out);
+	return rtp_avp2savp(s, &stream->crypto.out);
 }
 static int call_avp2savp_rtcp(str *s, struct packet_stream *stream) {
-	return rtcp_avp2savp(s, &r->other->crypto.out);
+	return rtcp_avp2savp(s, &stream->crypto.out);
 }
 static int call_savp2avp_rtp(str *s, struct packet_stream *stream) {
-	return rtp_savp2avp(s, &r->crypto.in);
+	return rtp_savp2avp(s, &stream->crypto.in);
 }
 static int call_savp2avp_rtcp(str *s, struct packet_stream *stream) {
-	return rtcp_savp2avp(s, &r->crypto.in);
+	return rtcp_savp2avp(s, &stream->crypto.in);
 }
 static int call_avpf2savp_rtcp(str *s, struct packet_stream *stream) {
 	int ret;
 	ret = rtcp_avpf2avp(s);
 	if (ret < 0)
 		return ret;
-	return rtcp_avp2savp(s, &r->other->crypto.out);
+	return rtcp_avp2savp(s, &stream->crypto.out);
 }
 static int call_savpf2avp_rtcp(str *s, struct packet_stream *stream) {
 	int ret;
-	ret = rtcp_savp2avp(s, &r->crypto.in);
+	ret = rtcp_savp2avp(s, &stream->crypto.in);
 	if (ret < 0)
 		return ret;
 	return rtcp_avpf2avp(s);
 }
 static int call_savpf2savp_rtcp(str *s, struct packet_stream *stream) {
 	int ret;
-	ret = rtcp_savp2avp(s, &r->crypto.in);
+	ret = rtcp_savp2avp(s, &stream->crypto.in);
 	if (ret < 0)
 		return ret;
 	ret = rtcp_avpf2avp(s);
 	if (ret < 0)
 		return ret;
-	return rtcp_avp2savp(s, &r->other->crypto.out);
+	return rtcp_avp2savp(s, &stream->crypto.out);
 }
 
 
@@ -367,138 +429,54 @@ static int __k_srtp_decrypt(struct mediaproxy_srtp *s, struct packet_stream *str
 	return __k_srtp_crypt(s, &stream->crypto.in);
 }
 
-static const struct streamhandler *determine_handler_rtp(struct packet_stream *in) {
-	switch (in->peer.protocol) {
-		case PROTO_RTP_AVP:
-		case PROTO_RTP_AVPF:
-			switch (in->peer_advertised.protocol) {
-				case PROTO_RTP_AVP:
-				case PROTO_RTP_AVPF:
-					return NULL;
+static void determine_handler(struct packet_stream *in, struct packet_stream *out) {
+	const struct streamhandler **sh_pp, *sh;
 
-				case PROTO_RTP_SAVP:
-				case PROTO_RTP_SAVPF:
-					return &__sh_rtp_avp2savp;
-
-				default:
-					abort();
-			}
-
-		case PROTO_RTP_SAVP:
-		case PROTO_RTP_SAVPF:
-			switch (in->peer_advertised.protocol) {
-				case PROTO_RTP_AVP:
-				case PROTO_RTP_AVPF:
-					return &__sh_rtp_savp2avp;
-
-				case PROTO_RTP_SAVPF:
-				case PROTO_RTP_SAVP:
-					return NULL;
-
-				default:
-					abort();
-			}
-
-		default:
-			abort();
-	}
-}
-static const struct streamhandler *determine_handler_rtcp(struct packet_stream *in) {
-	switch (in->peer.protocol) {
-		case PROTO_RTP_AVP:
-			switch (in->peer_advertised.protocol) {
-				case PROTO_RTP_AVPF:
-					return NULL;
-
-				case PROTO_RTP_SAVP:
-				case PROTO_RTP_SAVPF:
-					return &__sh_rtcp_avp2savp;
-
-				default:
-					abort();
-			}
-
-		case PROTO_RTP_SAVP:
-			switch (in->peer_advertised.protocol) {
-				case PROTO_RTP_AVP:
-				case PROTO_RTP_AVPF:
-					return &__sh_rtcp_savp2avp;
-
-				case PROTO_RTP_SAVPF:
-					return NULL;
-
-				default:
-					abort();
-			}
-
-		case PROTO_RTP_AVPF:
-			switch (in->peer_advertised.protocol) {
-				case PROTO_RTP_AVP:
-					return &__sh_rtcp_avpf2avp;
-
-				case PROTO_RTP_SAVP:
-					return &__sh_rtcp_avpf2savp;
-
-				case PROTO_RTP_SAVPF:
-					return &__sh_rtcp_avp2savp;
-
-				default:
-					abort();
-			}
-
-		case PROTO_RTP_SAVPF:
-			switch (in->peer_advertised.protocol) {
-				case PROTO_RTP_AVP:
-					return &__sh_rtcp_savpf2avp;
-
-				case PROTO_RTP_AVPF:
-					return &__sh_rtcp_savp2avp;
-
-				case PROTO_RTP_SAVP:
-					return &__sh_rtcp_savpf2savp;
-
-				default:
-					abort();
-			}
-
-		default:
-			abort();
-	}
-}
-static void determine_handler(struct packet_stream *in) {
-	const struct streamhandler *ret;
-
-	if (in->handler)
+	if (in->has_handler && out->has_handler)
 		return;
 
-	if (in->peer.protocol == in->peer_advertised.protocol)
+	if (in->media->protocol == out->media->protocol)
 		goto dummy;
-	if (in->peer.protocol == PROTO_UNKNOWN)
-		goto dummy;
-	if (in->peer_advertised.protocol == PROTO_UNKNOWN)
-		goto dummy;
+	if (in->media->protocol == PROTO_UNKNOWN)
+		goto err;
+	if (out->media->protocol == PROTO_UNKNOWN)
+		goto err;
 
-	if (in->rtcp)
-		ret = determine_handler_rtcp(in);
-	else
-		ret = determine_handler_rtp(in);
+	sh_pp = __sh_matrix[in->media->protocol];
+	if (!sh_pp)
+		goto err;
+	sh = sh_pp[out->media->protocol];
+	if (!sh)
+		goto err;
+	in->handler = sh;
 
-	if (!ret)
-		goto dummy;
+	sh_pp = __sh_matrix[out->media->protocol];
+	if (!sh_pp)
+		goto err;
+	sh = sh_pp[in->media->protocol];
+	if (!sh)
+		goto err;
+	out->handler = sh;
 
-	in->handler = ret;
+done:
+	in->has_handler = 1;
+	out->has_handler = 1;
 
 	return;
 
+err:
+	mylog(LOG_WARNING, "Unknown transport protocol encountered");
 dummy:
 	in->handler = &__sh_noop;
+	out->handler = &__sh_noop;
+	goto done;
 }
 
 /* called with stream and stream->*_sink locked */
 static int stream_packet(struct packet_stream *stream, str *s, struct sockaddr_in6 *fsin) {
-	struct packet_stream *sink;
+	struct packet_stream *sink = NULL;
 	struct call_media *media;
-	int ret, update = 0, stun_ret = 0, handler_ret = 0, muxed_rtcp = 0;
+	int ret, update = 0, stun_ret = 0, handler_ret = 0, muxed_rtcp = 0, rtcp = 0;
 	struct sockaddr_in6 sin6;
 	struct msghdr mh;
 	struct iovec iov;
@@ -511,6 +489,7 @@ static int stream_packet(struct packet_stream *stream, str *s, struct sockaddr_i
 	/*unsigned char cc;*/
 	char addr[64];
 	struct endpoint endpoint;
+	rewrite_func rwf_in, rwf_out;
 
 	media = stream->media;
 	call = stream->call;
@@ -532,11 +511,15 @@ static int stream_packet(struct packet_stream *stream, str *s, struct sockaddr_i
 	}
 
 	sink = stream->rtp_sink;
-	if (!sink && stream->rtcp)
+	if (!sink && stream->rtcp) {
 		sink = stream->rtcp_sink;
+		rtcp = 1;
+	}
 	muxed_rtcp = rtcp_demux(s, media);
-	if (muxed_rtcp == 2)
+	if (muxed_rtcp == 2) {
 		sink = stream->rtcp_sink;
+		rtcp = 1;
+	}
 
 	if (!sink || sink->fd.fd == -1) {
 		mylog(LOG_WARNING, LOG_PREFIX_C "RTP packet to port %u discarded from %s", 
@@ -548,11 +531,23 @@ static int stream_packet(struct packet_stream *stream, str *s, struct sockaddr_i
 		return 0;
 	}
 
-	determine_handler(stream);
-	if (stream->handler->rewrite)
-		handler_ret = stream->handler->rewrite(s, stream);
-		/* return values are: 0 = forward packet, -1 = error/dont forward,
-		 * 1 = forward and push update to redis */
+	determine_handler(stream, sink);
+
+	if (!rtcp) {
+		rwf_in = stream->handler->in->rtp;
+		rwf_out = sink->handler->out->rtp;
+	}
+	else {
+		rwf_in = stream->handler->in->rtcp;
+		rwf_out = sink->handler->out->rtcp;
+	}
+
+	/* return values are: 0 = forward packet, -1 = error/dont forward,
+	 * 1 = forward and push update to redis */
+	if (rwf_in)
+		handler_ret = rwf_in(s, stream);
+	if (handler_ret >= 0 && rwf_out)
+		handler_ret += rwf_out(s, sink);
 
 	if (handler_ret > 0)
 		update = 1;
@@ -599,12 +594,12 @@ kernel_check:
 	if (stream->no_kernel_support)
 		goto forward;
 
-	if (stream->confirmed && sink->confirmed && sink->filled)
+	if (stream->confirmed && sink && sink->confirmed && sink->filled)
 		kernelize(stream);
 
 forward:
 	if (is_addr_unspecified(&sink->advertised_endpoint.ip46)
-			|| !sink->advertised_endpoint.port
+			|| !sink || !sink->advertised_endpoint.port
 			|| stun_ret || handler_ret < 0)
 		goto drop;
 
@@ -683,6 +678,7 @@ out:
 
 
 /* lock this stream and all of its sinks */
+/* XXX more granular locking */
 static void stream_lock_all(struct packet_stream *stream) {
 retry:
 	mutex_lock(&stream->lock);
@@ -1437,6 +1433,7 @@ static struct packet_stream *__get_stream(struct call_media *media, GList **iter
 }
 
 /* called with call->master_lock held */
+/* XXX stream locking */
 static int monologue_offer_answer(struct call_monologue *monologue, GQueue *streams) {
 	struct stream_params *sp;
 	GList *ml_media, *other_ml_media, *iter, *other_iter;
@@ -1497,6 +1494,10 @@ static int monologue_offer_answer(struct call_monologue *monologue, GQueue *stre
 				other_stream->endpoint = sp->rtp_endpoint;
 				other_stream->advertised_endpoint = other_stream->endpoint;
 
+				/* XXX polymorph this */
+				stream->has_handler = 0;
+				other_stream->has_handler = 0;
+
 				/* only possible in answer (?) - saved from offer */
 				if (media->rtcp_mux)
 					goto rtcp;
@@ -1533,6 +1534,9 @@ rtcp:
 			stream->rtcp_sink = other_stream;
 			other_stream->rtcp_sink = stream;
 			other_stream->rtcp = 1;
+
+			stream->has_handler = 0;
+			other_stream->has_handler = 0;
 
 next:
 			other_stream->filled = 1;

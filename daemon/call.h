@@ -188,6 +188,7 @@ struct packet_stream {
 	int			confirmed:1;
 	int			kernelized:1;
 	int			no_kernel_support:1;
+	int			has_handler:1;
 };
 
 struct call_media {
