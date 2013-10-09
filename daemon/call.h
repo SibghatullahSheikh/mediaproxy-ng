@@ -110,6 +110,7 @@ struct stream_params {
 	unsigned int		consecutive_ports;
 	enum transport_protocol	protocol;
 	struct crypto_context	crypto;
+	enum stream_direction	direction[2];
 
 	int			no_rtcp:1;
 	int			implicit_rtcp:1;
@@ -198,6 +199,7 @@ struct call_media {
 	unsigned int		index;
 	str			type;
 	enum transport_protocol	protocol;
+	int			desired_family;
 
 	str			ice_ufrag;
 	str			ice_pwd;

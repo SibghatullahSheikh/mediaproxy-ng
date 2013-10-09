@@ -1626,14 +1626,18 @@ static int call_stream_address6(char *o, struct packet_stream *ps, enum stream_a
 
 static csa_func __call_stream_address(struct packet_stream *ps, int variant) {
 	struct callmaster *m;
-	struct peer *other;
+	struct packet_stream *sink;
+	struct call_media *sink_media;
 	csa_func variants[2];
 
 	assert(variant >= 0);
 	assert(variant < G_N_ELEMENTS(variants));
 
 	m = ps->call->callmaster;
-	other = p->other;
+	sink = ps->rtp_sink;
+	if (!sink)
+		sink = ps->rtcp_sink;
+	sink_media = sink->media;
 
 	variants[0] = call_stream_address4;
 	variants[1] = call_stream_address6;
@@ -1642,11 +1646,11 @@ static csa_func __call_stream_address(struct packet_stream *ps, int variant) {
 		variants[1] = NULL;
 		goto done;
 	}
-	if (other->desired_family == AF_INET)
+	if (sink_media->desired_family == AF_INET)
 		goto done;
-	if (other->desired_family == 0 && IN6_IS_ADDR_V4MAPPED(&other->rtps[0].peer.ip46))
+	if (sink_media->desired_family == 0 && IN6_IS_ADDR_V4MAPPED(&sink->endpoint.ip46))
 		goto done;
-	if (other->desired_family == 0 && is_addr_unspecified(&other->rtps[0].peer_advertised.ip46))
+	if (sink_media->desired_family == 0 && is_addr_unspecified(&sink->advertised_endpoint.ip46))
 		goto done;
 
 	variants[0] = call_stream_address6;
@@ -1657,29 +1661,29 @@ done:
 	return variants[variant];
 }
 
-int call_stream_address(char *o, struct peer *p, enum stream_address_format format, int *len) {
+int call_stream_address(char *o, struct packet_stream *ps, enum stream_address_format format, int *len) {
 	csa_func f;
 
-	f = __call_stream_address(p, 0);
-	return f(o, p, format, len);
+	f = __call_stream_address(ps, 0);
+	return f(o, ps, format, len);
 }
 
-int call_stream_address_alt(char *o, struct peer *p, enum stream_address_format format, int *len) {
+int call_stream_address_alt(char *o, struct packet_stream *ps, enum stream_address_format format, int *len) {
 	csa_func f;
 
-	f = __call_stream_address(p, 1);
-	return f ? f(o, p, format, len) : -1;
+	f = __call_stream_address(ps, 1);
+	return f ? f(o, ps, format, len) : -1;
 }
 
 int callmaster_has_ipv6(struct callmaster *m) {
 	return is_addr_unspecified(&m->conf.ipv6) ? 0 : 1;
 }
 
-static int call_stream_address_gstring(GString *o, struct peer *p, enum stream_address_format format) {
+static int call_stream_address_gstring(GString *o, struct packet_stream *ps, enum stream_address_format format) {
 	int len, ret;
 	char buf[64]; /* 64 bytes ought to be enough for anybody */
 
-	ret = call_stream_address(buf, p, format, &len);
+	ret = call_stream_address(buf, ps, format, &len);
 	g_string_append_len(o, buf, len);
 	return ret;
 }
