@@ -55,7 +55,7 @@ typedef int (*rewrite_func)(str *, struct packet_stream *);
 /* also serves as array index for callstream->peers[] */
 struct iterator_helper {
 	GSList			*del;
-	struct streamrelay	*ports[0x10000];
+	struct packet_stream	*ports[0x10000];
 };
 struct xmlrpc_helper {
 	GStringChunk		*c;
@@ -790,31 +790,34 @@ static void info_parse(const char *s, GHashTable *ih, struct callmaster *m) {
 
 
 static int streams_parse_func(char **a, void **ret, void *p) {
-	struct stream_input *st;
+	struct stream_params *sp;
 	u_int32_t ip;
 	int *i;
 
 	i = p;
-	st = g_slice_alloc0(sizeof(*st));
+	sp = g_slice_alloc0(sizeof(*sp));
 
 	ip = inet_addr(a[0]);
 	if (ip == -1)
 		goto fail;
 
-	in4_to_6(&st->stream.ip46, ip);
-	st->stream.port = atoi(a[1]);
-	st->stream.num = ++(*i);
-	st->consecutive_num = 1;
+	in4_to_6(&sp->rtp_endpoint.ip46, ip);
+	sp->rtp_endpoint.port = atoi(a[1]);
+	sp->index = ++(*i);
+	sp->consecutive_ports = 1;
 
-	if (!st->stream.port && strcmp(a[1], "0"))
+	sp->rtcp_endpoint = sp->rtp_endpoint;
+	sp->rtcp_endpoint.port++;
+
+	if (!sp->rtp_endpoint.port && strcmp(a[1], "0"))
 		goto fail;
 
-	*ret = st;
+	*ret = sp;
 	return 0;
 
 fail:
 	mylog(LOG_WARNING, "Failed to parse a media stream: %s:%s", a[0], a[1]);
-	g_slice_free1(sizeof(*st), st);
+	g_slice_free1(sizeof(*sp), sp);
 	return -1;
 }
 
@@ -839,50 +842,44 @@ static void call_timer_iterator(void *key, void *val, void *ptr) {
 	struct call *c = val;
 	struct iterator_helper *hlp = ptr;
 	GList *it;
-	struct callstream *cs;
-	int i, j;
-	struct peer *p;
 	struct callmaster *cm;
 	unsigned int check;
-	struct streamrelay *sr;
 	int good = 0;
+	struct packet_stream *ps;
 
-	mutex_lock(&c->lock);
+	mutex_lock(&c->master_lock);
 
-	if (!c->callstreams->head)
+	if (!c->streams)
 		goto drop;
 
 	cm = c->callmaster;
 
-	for (it = c->callstreams->head; it; it = it->next) {
-		cs = it->data;
-		mutex_lock(&cs->lock);
+	for (it = c->streams; it; it = it->next) {
+		ps = it->data;
+		mutex_lock(&ps->lock);
 
-		for (i = 0; i < 2; i++) {
-			p = &cs->peers[i];
-			for (j = 0; j < 2; j++) {
-				sr = &p->rtps[j];
-				if (!sr->fd.localport)
-					continue;
-				if (hlp->ports[sr->fd.localport])
-					abort();
-				hlp->ports[sr->fd.localport] = sr;
-				obj_hold(cs);
+		if (!ps->fd.localport)
+			continue;
+		if (hlp->ports[ps->fd.localport])
+			abort();
+		hlp->ports[ps->fd.localport] = ps;
+		obj_hold(ps);
 
-				if (good)
-					continue;
+		if (good)
+			continue;
 
-				check = cm->conf.timeout;
-				if (!sr->peer_advertised.port)
-					check = cm->conf.silent_timeout;
-				else if (is_addr_unspecified(&sr->peer_advertised.ip46))
-					check = cm->conf.silent_timeout;
+		check = cm->conf.timeout;
+		/* XXX silenced stream timeout handling
+		if (!sr->peer_advertised.port)
+			check = cm->conf.silent_timeout;
+		else if (is_addr_unspecified(&sr->peer_advertised.ip46))
+			check = cm->conf.silent_timeout;
+		*/
 
-				if (poller_now - sr->last < check)
-					good = 1;
-			}
-		}
-		mutex_unlock(&cs->lock);
+		if (poller_now - ps->last_packet < check)
+			good = 1;
+
+		mutex_unlock(&ps->lock);
 	}
 
 	if (good)
@@ -892,12 +889,12 @@ static void call_timer_iterator(void *key, void *val, void *ptr) {
 		LOG_PARAMS_C(c));
 
 drop:
-	mutex_unlock(&c->lock);
+	mutex_unlock(&c->master_lock);
 	hlp->del = g_slist_prepend(hlp->del, obj_get(c));
 	return;
 
 out:
-	mutex_unlock(&c->lock);
+	mutex_unlock(&c->master_lock);
 }
 
 void xmlrpc_kill_calls(void *p) {
@@ -982,7 +979,7 @@ fault:
 void kill_calls_timer(GSList *list, struct callmaster *m) {
 	struct call *ca;
 	GList *csl;
-	struct callstream *cs;
+	struct call_monologue *cm;
 	const char *url;
 	struct xmlrpc_helper *xh = NULL;
 
@@ -1004,18 +1001,16 @@ void kill_calls_timer(GSList *list, struct callmaster *m) {
 		if (!url)
 			goto destroy;
 
-		mutex_lock(&ca->lock);
+		mutex_lock(&ca->master_lock);
 
-		for (csl = ca->callstreams->head; csl; csl = csl->next) {
-			cs = csl->data;
-			mutex_lock(&cs->lock);
-			if (!cs->peers[1].tag.s || !cs->peers[1].tag.len)
+		for (csl = ca->monologues; csl; csl = csl->next) {
+			cm = csl->data;
+			if (!cm->tag.s || !cm->tag.len)
 				goto next;
-			xh->tags = g_slist_prepend(xh->tags, str_chunk_insert(xh->c, &cs->peers[1].tag));
+			xh->tags = g_slist_prepend(xh->tags, str_chunk_insert(xh->c, &cm->tag));
 next:
-			mutex_unlock(&cs->lock);
+			;
 		}
-		mutex_unlock(&ca->lock);
 
 destroy:
 		call_destroy(ca);
@@ -1029,13 +1024,13 @@ destroy:
 
 
 #define DS(x) do {							\
-		mutex_lock(&cs->lock);					\
-		if (ke->stats.x < sr->kstats.x)				\
+		mutex_lock(&ps->lock);					\
+		if (ke->stats.x < ps->kernel_stats.x)			\
 			d = 0;						\
 		else							\
-			d = ke->stats.x - sr->kstats.x;			\
-		sr->stats.x += d;					\
-		mutex_unlock(&cs->lock);				\
+			d = ke->stats.x - ps->kernel_stats.x;		\
+		ps->stats.x += d;					\
+		mutex_unlock(&ps->lock);				\
 		mutex_lock(&m->statspslock);				\
 		m->statsps.x += d;					\
 		mutex_unlock(&m->statspslock);				\
@@ -1045,10 +1040,9 @@ static void callmaster_timer(void *ptr) {
 	struct iterator_helper hlp;
 	GList *i;
 	struct mediaproxy_list_entry *ke;
-	struct streamrelay *sr;
+	struct packet_stream *ps, *sink;
 	u_int64_t d;
 	struct stats tmpstats;
-	struct callstream *cs;
 	int j, update;
 
 	ZERO(hlp);
@@ -1069,53 +1063,51 @@ static void callmaster_timer(void *ptr) {
 	while (i) {
 		ke = i->data;
 
-		cs = NULL;
-		sr = hlp.ports[ke->target.target_port];
-		if (!sr)
+		ps = hlp.ports[ke->target.target_port];
+		if (!ps)
 			goto next;
-		cs = sr->up->up;
 
 		DS(packets);
 		DS(bytes);
 		DS(errors);
 
-		mutex_lock(&cs->lock);
-		if (ke->stats.packets != sr->kstats.packets)
-			sr->last = poller_now;
+		if (ke->stats.packets != ps->kernel_stats.packets)
+			ps->last_packet = poller_now;
 
-		sr->kstats.packets = ke->stats.packets;
-		sr->kstats.bytes = ke->stats.bytes;
-		sr->kstats.errors = ke->stats.errors;
+		ps->kernel_stats.packets = ke->stats.packets;
+		ps->kernel_stats.bytes = ke->stats.bytes;
+		ps->kernel_stats.errors = ke->stats.errors;
 
 		update = 0;
 
-		if (sr->other->crypto.out.crypto_suite
-				&& ke->target.encrypt.last_index - sr->other->crypto.out.last_index > 0x4000) {
-			sr->other->crypto.out.last_index = ke->target.encrypt.last_index;
+		/* XXX common piece of code */
+		sink = ps->rtp_sink;
+		if (!sink)
+			sink = ps->rtcp_sink;
+		if (sink && sink->crypto.out.crypto_suite
+				&& ke->target.encrypt.last_index - sink->crypto.out.last_index > 0x4000) {
+			sink->crypto.out.last_index = ke->target.encrypt.last_index;
 			update = 1;
 		}
-		if (sr->crypto.in.crypto_suite
-				&& ke->target.decrypt.last_index - sr->crypto.in.last_index > 0x4000) {
-			sr->crypto.in.last_index = ke->target.decrypt.last_index;
+		if (ps->crypto.in.crypto_suite
+				&& ke->target.decrypt.last_index - ps->crypto.in.last_index > 0x4000) {
+			ps->crypto.in.last_index = ke->target.decrypt.last_index;
 			update = 1;
 		}
 
-		mutex_unlock(&cs->lock);
 
 		if (update)
-			redis_update(cs->call, m->conf.redis);
+			redis_update(ps->call, m->conf.redis);
 
 next:
 		hlp.ports[ke->target.target_port] = NULL;
 		g_slice_free1(sizeof(*ke), ke);
 		i = g_list_delete_link(i, i);
-		if (cs)
-			obj_put(cs);
 	}
 
 	for (j = 0; j < (sizeof(hlp.ports) / sizeof(*hlp.ports)); j++)
 		if (hlp.ports[j])
-			obj_put(hlp.ports[j]->up->up);
+			obj_put(hlp.ports[j]);
 
 	if (!hlp.del)
 		return;
@@ -1292,59 +1284,6 @@ fail:
 	return -1;
 }
 
-/* caller is responsible for appropriate locking */
-static int setup_peer(struct peer *p, struct stream_input *s, const str *tag) {
-	struct streamrelay *a, *b;
-	struct callstream *cs;
-	struct call *ca;
-	int i;
-
-	cs = p->up;
-	ca = cs->call;
-	a = &p->rtps[0];
-	b = &p->rtps[1];
-
-	if (a->peer_advertised.port != s->stream.port
-			|| !IN6_ARE_ADDR_EQUAL(&a->peer_advertised.ip46, &s->stream.ip46)) {
-		cs->peers[0].confirmed = 0;
-		unkernelize(&cs->peers[0]);
-		cs->peers[1].confirmed = 0;
-		unkernelize(&cs->peers[1]);
-	}
-
-	a->peer = s->stream;
-	b->peer = s->stream;
-	if (b->peer.port)
-		b->peer.port++;
-	a->peer_advertised = a->peer;
-	b->peer_advertised = b->peer;
-	a->rtcp = s->is_rtcp;
-	b->rtcp = 1;
-	a->other->rtcp_mux = s->rtcp_mux;
-	a->other->crypto.in = s->crypto;
-	b->other->crypto.in = s->crypto;
-
-	for (i = 0; i < 2; i++) {
-		switch (s->direction[i]) {
-			case DIR_INTERNAL:
-				cs->peers[i ^ p->idx].desired_family = AF_INET;
-				break;
-			case DIR_EXTERNAL:
-				cs->peers[i ^ p->idx].desired_family = AF_INET6;
-				break;
-			default:
-				break;
-		}
-	}
-
-	call_str_cpy(ca, &p->tag, tag);
-	p->filled = 1;
-
-	return 0;
-}
-
-
-
 static struct call_media *__get_media(struct call_monologue *ml, GList **it, const struct stream_params *sp) {
 	struct call_media *med;
 
@@ -1368,7 +1307,7 @@ static struct call_media *__get_media(struct call_monologue *ml, GList **it, con
 	med->index = sp->index;
 	call_str_cpy(ml->call, &med->type, &sp->type);
 
-	g_queue_push_tail(ml->medias, med);
+	g_queue_push_tail(&ml->medias, med);
 	*it = ml->medias.tail;
 
 	return med;
@@ -1409,7 +1348,7 @@ static int __num_media_streams(struct call_media *media, unsigned int num_ports)
 		g_queue_push_tail(&media->streams, stream);
 		call->streams = g_list_prepend(call->streams, stream);
 
-		pi.fd = stream->fd;
+		pi.fd = stream->fd.fd;
 		pi.obj = &stream->obj;
 		pi.readable = stream_readable;
 		pi.closed = stream_closed;
@@ -1436,10 +1375,9 @@ static struct packet_stream *__get_stream(struct call_media *media, GList **iter
 /* XXX stream locking */
 static int monologue_offer_answer(struct call_monologue *monologue, GQueue *streams) {
 	struct stream_params *sp;
-	GList *ml_media, *other_ml_media, *iter, *other_iter;
+	GList *media_iter, *ml_media, *other_ml_media, *iter, *other_iter;
 	struct call_media *media, *other_media;
 	unsigned int i, num_ports;
-	struct call *call = monologue->call;
 	struct call_monologue *other_ml = monologue->active_dialogue;
 	struct packet_stream *stream, *other_stream;
 
@@ -1450,8 +1388,8 @@ static int monologue_offer_answer(struct call_monologue *monologue, GQueue *stre
 
 	ml_media = other_ml_media = NULL;
 
-	for (i = s->head; i; i = i->next) {
-		sp = i->data;
+	for (media_iter = streams->head; media_iter; media_iter = media_iter->next) {
+		sp = media_iter->data;
 
 		/* first, check for existance of call_media struct on both sides of
 		 * the dialogue */
@@ -1486,7 +1424,7 @@ static int monologue_offer_answer(struct call_monologue *monologue, GQueue *stre
 
 			if (!(i & 1) || media->rtcp_mux) {
 				/* RTP */
-				other_stream = __get_stream(other_media, &other_item);
+				other_stream = __get_stream(other_media, &other_iter);
 
 				stream->rtp_sink = other_stream;
 				other_stream->rtp_sink = stream;
@@ -1517,13 +1455,13 @@ rtcp:
 				/* endpoint already set */
 			}
 			else if (sp->rtcp_endpoint.port) {
-				other_stream = __get_stream(other_media, &other_item);
+				other_stream = __get_stream(other_media, &other_iter);
 
 				other_stream->endpoint = sp->rtcp_endpoint;
 				other_stream->advertised_endpoint = other_stream->endpoint;
 			}
 			else {
-				other_stream = __get_stream(other_media, &other_item);
+				other_stream = __get_stream(other_media, &other_iter);
 
 				other_stream->implicit_rtcp = 1;
 				other_stream->endpoint = sp->rtp_endpoint;
@@ -1551,245 +1489,33 @@ error:
 	return -1;
 }
 
-/* called with call->master_lock held */
-static int call_streams(struct call *c, GQueue *s, const str *tag, enum call_opmode opmode) {
-	GQueue *q;
-	GList *i, *l;
-	struct stream_params *sp;
-	int x;
-	struct streamrelay *matched_relay;
-	struct callstream *cs, *cs_o;
-	struct peer *p, *p2;
-	int ret = 1;
-	struct relays_cache relays_cache;
-
-	q = g_queue_new();	/* new callstreams list */
-	relays_cache_init(&relays_cache);
-
-	for (i = s->head; i; i = i->next) {
-		sp = i->data;
-
-		p = NULL;
-
-		/* look for an existing call stream with identical parameters */
-		for (l = c->callstreams->head; l; l = l->next) {
-			cs_o = l->data;
-			mutex_lock(&cs_o->lock);
-			for (x = 0; x < 2; x++) {
-				matched_relay = &cs_o->peers[x].rtps[0];
-				DBG("comparing new ["IP6F"]:%u/%.*s to old ["IP6F"]:%u/%.*s",
-					IP6P(&t->stream.ip46), t->stream.port, STR_FMT(tag),
-					IP6P(&matched_relay->peer_advertised.ip46),
-					matched_relay->peer_advertised.port, STR_FMT(&cs_o->peers[x].tag));
-
-				if (!IN6_ARE_ADDR_EQUAL(&matched_relay->peer_advertised.ip46, &t->stream.ip46)
-						&& !is_addr_unspecified(&matched_relay->peer_advertised.ip46)
-						&& !is_addr_unspecified(&t->stream.ip46))
-					continue;
-				if (matched_relay->peer_advertised.port != t->stream.port
-						&& matched_relay->peer_advertised.port
-						&& t->stream.port)
-					continue;
-				if (str_cmp_str0(&cs_o->peers[x].tag, tag))
-					continue;
-				DBG("found existing call stream to steal");
-				goto found;
-			}
-			mutex_unlock(&cs_o->lock);
-		}
-
-		/* not found */
-		matched_relay = NULL;
-		cs_o = NULL;
-		l = NULL;
-
-found:
-		/* cs_o remains locked if set */
-		if (opmode == OP_OFFER) {
-			DBG("creating new callstream");
-
-			cs = callstream_new(c, t->stream.num);
-			mutex_lock(&cs->lock);
-
-			if (!matched_relay) {
-				/* nothing found to re-use, use new ports */
-				relays_cache_get_ports(&relays_cache, t->consecutive_num, c);
-				callstream_init(cs, &relays_cache);
-				p = &cs->peers[0];
-				setup_peer(p, t, tag);
-			}
-			else {
-				/* re-use, so don't use new ports */
-				callstream_init(cs, NULL);
-				if (matched_relay->up->idx == 0) {
-					/* request/lookup came in the same order as before */
-					steal_peer(&cs->peers[0], &cs_o->peers[0]);
-					steal_peer(&cs->peers[1], &cs_o->peers[1]);
-				}
-				else {
-					/* reversed request/lookup */
-					steal_peer(&cs->peers[0], &cs_o->peers[1]);
-					steal_peer(&cs->peers[1], &cs_o->peers[0]);
-				}
-				mutex_unlock(&cs_o->lock);
-			}
-
-			mutex_unlock(&cs->lock);
-			g_queue_push_tail(q, cs); /* hand over the ref of new cs */
-			ZERO(c->lookup_done);
-			continue;
-		}
-
-		/* lookup */
-		for (l = c->callstreams->head; l; l = l->next) {
-			cs = l->data;
-			if (cs != cs_o)
-				mutex_lock(&cs->lock);
-			DBG("hunting for callstream, %i <> %i", cs->num, t->stream.num);
-			if (cs->num == t->stream.num)
-				goto got_cs;
-			if (cs != cs_o)
-				mutex_unlock(&cs->lock);
-		}
-
-		mylog(LOG_WARNING, LOG_PREFIX_CI "Got LOOKUP, but no usable callstreams found", 
-			LOG_PARAMS_CI(c));
-		if (cs_o)
-			mutex_unlock(&cs_o->lock);
-		break;
-
-got_cs:
-		/* cs and cs_o remain locked, and maybe cs == cs_o */
-		/* matched_relay == peer[x].rtp[0] of cs_o */
-		g_queue_delete_link(c->callstreams, l); /* steal cs ref */
-		p = &cs->peers[1];
-		p2 = &cs->peers[0];
-
-		if (c->lookup_done && matched_relay) {
-			/* duplicate/stray lookup. don't do anything except replying with something
-			   we already have. check whether the direction is reversed or not and return
-			   the appropriate details. if no matching stream was found, results are
-			   undefined. */
-			DBG("double lookup");
-			if (p == matched_relay->up)
-				goto skip;
-			if (p2 == matched_relay->up) {
-				ret = -1;
-				goto skip;
-			}
-		}
-
-
-		if (matched_relay && p == matched_relay->up) {
-			/* best case, nothing to do */
-			DBG("case 1");
-			/* ... unless we (un)silenced the stream, in which case
-			   we need to copy the new information */
-			if (!IN6_ARE_ADDR_EQUAL(&matched_relay->peer_advertised.ip46, &t->stream.ip46)
-					|| matched_relay->peer_advertised.port != t->stream.port)
-				setup_peer(p, t, tag);
-		}
-		else if (matched_relay && cs_o != cs) {
-			/* found something, but it's linked to a different stream */
-			DBG("case 2");
-			steal_peer(p, matched_relay->up);
-		}
-		else if (!matched_relay && !p->filled) {
-			/* nothing found to steal, but this end is open */
-			DBG("case 3");
-			setup_peer(p, t, tag);
-		}
-		else {
-			/* nothing found to steal and this end is used */
-			/* need a new call stream after all */
-			DBG("case 4");
-			if (cs_o && cs_o != cs)
-				mutex_unlock(&cs_o->lock);
-			cs_o = cs;
-			cs = callstream_new(c, t->stream.num);
-			mutex_lock(&cs->lock);
-			relays_cache_get_ports(&relays_cache, t->consecutive_num, c);
-			callstream_init(cs, &relays_cache);
-			steal_peer(&cs->peers[0], &cs_o->peers[0]);
-			p = &cs->peers[1];
-			setup_peer(p, t, tag);
-			g_queue_push_tail(c->callstreams, cs_o); /* hand over ref to original cs */
-		}
-
-		time(&c->lookup_done);
-
-skip:
-		g_queue_push_tail(q, p->up); /* hand over ref to cs */
-		mutex_unlock(&cs->lock);
-		if (cs_o && cs_o != cs)
-			mutex_unlock(&cs_o->lock);
-	}
-
-	ret = ret * q->length;
-
-	if (!q->head)
-		g_queue_free(q);
-	else {
-		if (c->callstreams->head) {
-			q->tail->next = c->callstreams->head;
-			c->callstreams->head->prev = q->tail;
-			q->tail = c->callstreams->tail;
-			q->length += c->callstreams->length;
-			c->callstreams->head = c->callstreams->tail = NULL;
-			c->callstreams->length = 0;
-		}
-		g_queue_free(c->callstreams);
-		c->callstreams = q;
-	}
-
-	relays_cache_cleanup(&relays_cache, c->callmaster);
-	return ret;
-}
-
-
-
-
 static void unkernelize(struct packet_stream *p) {
-	struct streamrelay *r;
-	int i;
-
 	if (!p->kernelized)
 		return;
 	if (p->no_kernel_support)
 		return;
 
-	kernel_del_stream(p->call->callmaster->conf.kernelfd, r->fd.localport);
+	kernel_del_stream(p->call->callmaster->conf.kernelfd, p->fd.localport);
 
 	p->kernelized = 0;
 }
 
 
-/* called with callstream->lock held */
-static void kill_callstream(struct callstream *s) {
-	int i, j;
-	struct peer *p;
-	struct streamrelay *r;
+/* called with ps->lock held */
+static void kill_packet_stream(struct packet_stream *ps) {
+	struct poller *p = ps->call->callmaster->poller;
 
-	for (i = 0; i < 2; i++) {
-		p = &s->peers[i];
+	unkernelize(ps);
 
-		unkernelize(p);
+	poller_del_item(p, ps->fd.fd);
 
-		for (j = 0; j < 2; j++) {
-			r = &p->rtps[j];
-
-			if (r->fd.fd != -1)
-				poller_del_item(s->call->callmaster->poller, r->fd.fd);
-
-			crypto_cleanup(&r->crypto.in);
-			crypto_cleanup(&r->crypto.out);
-		}
-	}
+	crypto_cleanup(&ps->crypto.in);
+	crypto_cleanup(&ps->crypto.out);
 }
 
 static void call_destroy(struct call *c) {
 	struct callmaster *m;
-	struct callstream *s;
+	struct packet_stream *ps;
 	int ret;
 
 	if (!c)
@@ -1807,13 +1533,17 @@ static void call_destroy(struct call *c) {
 
 	redis_delete(c, m->conf.redis);
 
-	mutex_lock(&c->lock);
-	/* at this point, no more callstreams can be added */
+	mutex_lock(&c->master_lock);
+	/* at this point, no more packet streams can be added */
+	/* XXX is this really true? */
 	mylog(LOG_INFO, LOG_PREFIX_C "Final packet stats:", LOG_PARAMS_C(c));
-	while (c->callstreams->head) {
-		s = g_queue_pop_head(c->callstreams);
-		mutex_unlock(&c->lock);
-		mutex_lock(&s->lock);
+	while (c->streams) {
+		ps = c->streams->data;
+		c->streams = g_list_remove_link(c->streams, c->streams);
+		mutex_unlock(&c->master_lock);
+
+		mutex_lock(&ps->lock);
+		/* XXX
 		mylog(LOG_INFO, LOG_PREFIX_C
 			"--- "
 			"side A: "
@@ -1831,22 +1561,23 @@ static void call_destroy(struct call *c) {
 			s->peers[1].rtps[0].stats.bytes, s->peers[1].rtps[0].stats.errors,
 			s->peers[1].rtps[1].fd.localport, s->peers[1].rtps[1].stats.packets,
 			s->peers[1].rtps[1].stats.bytes, s->peers[1].rtps[1].stats.errors);
-		kill_callstream(s);
-		mutex_unlock(&s->lock);
-		obj_put(s);
-		mutex_lock(&c->lock);
+		*/
+		/* XXX refcount, not the correct cleanup sequence! */
+		kill_packet_stream(ps);
+		mutex_unlock(&ps->lock);
+		obj_put(ps);
+		mutex_lock(&c->master_lock);
 	}
-	mutex_unlock(&c->lock);
+	mutex_unlock(&c->master_lock);
 }
 
 
 
-typedef int (*csa_func)(char *o, struct peer *p, enum stream_address_format format, int *len);
+typedef int (*csa_func)(char *o, struct packet_stream *ps, enum stream_address_format format, int *len);
 
-static int call_stream_address4(char *o, struct peer *p, enum stream_address_format format, int *len) {
-	struct callstream *cs = p->up;
+static int call_stream_address4(char *o, struct packet_stream *ps, enum stream_address_format format, int *len) {
 	u_int32_t ip4;
-	struct callmaster *m = cs->call->callmaster;
+	struct callmaster *m = ps->call->callmaster;
 	int l = 0;
 
 	if (format == SAF_NG) {
@@ -1854,7 +1585,7 @@ static int call_stream_address4(char *o, struct peer *p, enum stream_address_for
 		l = 4;
 	}
 
-	ip4 = p->rtps[0].peer_advertised.ip46.s6_addr32[3];
+	ip4 = ps->advertised_endpoint.ip46.s6_addr32[3];
 	if (!ip4) {
 		strcpy(o + l, "0.0.0.0");
 		l += 7;
@@ -1868,8 +1599,8 @@ static int call_stream_address4(char *o, struct peer *p, enum stream_address_for
 	return AF_INET;
 }
 
-static int call_stream_address6(char *o, struct peer *p, enum stream_address_format format, int *len) {
-	struct callmaster *m = p->up->call->callmaster;
+static int call_stream_address6(char *o, struct packet_stream *ps, enum stream_address_format format, int *len) {
+	struct callmaster *m = ps->call->callmaster;
 	int l = 0;
 
 	if (format == SAF_NG) {
@@ -1877,7 +1608,7 @@ static int call_stream_address6(char *o, struct peer *p, enum stream_address_for
 		l += 4;
 	}
 
-	if (is_addr_unspecified(&p->rtps[0].peer_advertised.ip46)) {
+	if (is_addr_unspecified(&ps->advertised_endpoint.ip46)) {
 		strcpy(o + l, "::");
 		l += 2;
 	}
@@ -1893,7 +1624,7 @@ static int call_stream_address6(char *o, struct peer *p, enum stream_address_for
 	return AF_INET6;
 }
 
-static csa_func __call_stream_address(struct peer *p, int variant) {
+static csa_func __call_stream_address(struct packet_stream *ps, int variant) {
 	struct callmaster *m;
 	struct peer *other;
 	csa_func variants[2];
@@ -1901,7 +1632,7 @@ static csa_func __call_stream_address(struct peer *p, int variant) {
 	assert(variant >= 0);
 	assert(variant < G_N_ELEMENTS(variants));
 
-	m = p->up->call->callmaster;
+	m = ps->call->callmaster;
 	other = p->other;
 
 	variants[0] = call_stream_address4;
