@@ -1690,44 +1690,45 @@ static int call_stream_address_gstring(GString *o, struct packet_stream *ps, enu
 
 
 
-static str *streams_print(GQueue *s, int num, enum call_opmode opmode, const char *prefix, enum stream_address_format format) {
+static str *streams_print(GQueue *s, int start, int end, const char *prefix, enum stream_address_format format) {
 	GString *o;
-	int i, off;
+	int i;
 	GList *l;
-	struct callstream *t;
-	struct streamrelay *x;
+	struct call_media *media;
+	struct packet_stream *ps;
 	int af;
-
-	off = opmode; /* 0 or 1 */
-	if (num < 0)
-		off ^= 1; /* 1 or 0 */
-	num = abs(num);
 
 	o = g_string_new_str();
 	if (prefix)
 		g_string_append_printf(o, "%s ", prefix);
 
-	if (!s->head)
+	for (i = start; i < end; i++) {
+		for (l = s->head; l; l = l->next) {
+			media = l->data;
+			if (media->index == i)
+				goto found;
+		}
+		mylog(LOG_WARNING, "Requested media index %i not found", i);
 		goto out;
 
-	t = s->head->data;
-	mutex_lock(&t->lock);
+found:
+		if (!media->streams.head) {
+			mylog(LOG_WARNING, "Media has no streams");
+			goto out;
+		}
+		ps = media->streams.head->data;
 
-	if (format == SAF_TCP)
-		call_stream_address_gstring(o, &t->peers[off], format);
+		if (format == SAF_TCP)
+			call_stream_address_gstring(o, ps, format);
 
-	for (i = 0, l = s->head; i < num && l; i++, l = l->next) {
-		t = l->data;
-		x = &t->peers[off].rtps[0];
-		g_string_append_printf(o, (format == 1) ? "%u " : " %u", x->fd.localport);
+		g_string_append_printf(o, (format == 1) ? "%u " : " %u", ps->fd.localport);
+
+		if (format == SAF_UDP) {
+			af = call_stream_address_gstring(o, ps, format);
+			g_string_append_printf(o, " %c", (af == AF_INET) ? '4' : '6');
+		}
+
 	}
-
-	if (format == SAF_UDP) {
-		af = call_stream_address_gstring(o, &t->peers[off], format);
-		g_string_append_printf(o, " %c", (af == AF_INET) ? '4' : '6');
-	}
-
-	mutex_unlock(&t->lock);
 
 out:
 	g_string_append(o, "\n");
@@ -1738,11 +1739,13 @@ out:
 static void call_free(void *p) {
 	struct call *c = p;
 
-	g_hash_table_destroy(c->branches);
-	g_queue_free(c->callstreams);
-	mutex_destroy(&c->lock);
-	mutex_destroy(&c->chunk_lock);
-	g_string_chunk_free(c->chunk);
+	/* XXX */
+	//g_hash_table_destroy(c->branches);
+	g_hash_table_destroy(c->tags);
+	//g_queue_free(c->callstreams);
+	mutex_destroy(&c->buffer_lock);
+	mutex_destroy(&c->master_lock);
+	call_buffer_free(&c->buffer);
 }
 
 static struct call *call_create(const str *callid, struct callmaster *m) {
@@ -1752,7 +1755,7 @@ static struct call *call_create(const str *callid, struct callmaster *m) {
 		STR_FMT(callid));	/* XXX will spam syslog on recovery from DB */
 	c = obj_alloc0("call", sizeof(*c), call_free);
 	c->callmaster = m;
-	mutex_init(&c->buffer_init);
+	mutex_init(&c->buffer_lock);
 	call_buffer_init(&c->buffer);
 	mutex_init(&c->master_lock);
 	c->tags = g_hash_table_new(str_hash, str_equal);
@@ -1780,12 +1783,12 @@ restart:
 			goto restart;
 		}
 		g_hash_table_insert(m->callhash, &c->callid, obj_get(c));
-		mutex_lock(&c->lock);
+		mutex_lock(&c->master_lock);
 		rwlock_unlock_w(&m->hashlock);
 	}
 	else {
 		obj_hold(c);
-		mutex_lock(&c->lock);
+		mutex_lock(&c->master_lock);
 		rwlock_unlock_r(&m->hashlock);
 	}
 
@@ -1803,7 +1806,7 @@ static struct call *call_get(const str *callid, struct callmaster *m) {
 		return NULL;
 	}
 
-	mutex_lock(&ret->lock);
+	mutex_lock(&ret->master_lock);
 	obj_hold(ret);
 	rwlock_unlock_r(&m->hashlock);
 
@@ -1825,16 +1828,18 @@ static struct call_monologue *__monologue_create(struct call *call) {
 
 	ret->call = call;
 	ret->created = poller_now;
-	g_queue_init(&ret->dialoges);
+	g_queue_init(&ret->dialogues);
 	ret->other_tags = g_hash_table_new(str_hash, str_equal);
 	g_queue_init(&ret->medias);
+
+	return ret;
 }
 
 static void __monologue_tag(struct call_monologue *ml, const str *tag) {
 	struct call *call = ml->call;
 
 	call_str_cpy(call, &ml->tag, tag);
-	g_hash_table_insert(call->tags, &ml->tag, ret);
+	g_hash_table_insert(call->tags, &ml->tag, ml);
 }
 
 static void __monologue_unkernelize(struct call_monologue *monologue) {
@@ -1915,28 +1920,28 @@ tag:
 	return ret;
 }
 
-static int addr_parse_udp(struct stream_input *st, char **out) {
+static int addr_parse_udp(struct stream_params *sp, char **out) {
 	u_int32_t ip4;
 	const char *cp;
 	char c;
 	int i;
 
-	ZERO(*st);
+	ZERO(*sp);
 	if (out[RE_UDP_UL_ADDR4] && *out[RE_UDP_UL_ADDR4]) {
 		ip4 = inet_addr(out[RE_UDP_UL_ADDR4]);
 		if (ip4 == -1)
 			goto fail;
-		in4_to_6(&st->stream.ip46, ip4);
+		in4_to_6(&sp->rtp_endpoint.ip46, ip4);
 	}
 	else if (out[RE_UDP_UL_ADDR6] && *out[RE_UDP_UL_ADDR6]) {
-		if (inet_pton(AF_INET6, out[RE_UDP_UL_ADDR6], &st->stream.ip46) != 1)
+		if (inet_pton(AF_INET6, out[RE_UDP_UL_ADDR6], &sp->rtp_endpoint.ip46) != 1)
 			goto fail;
 	}
 	else
 		goto fail;
 
-	st->stream.port = atoi(out[RE_UDP_UL_PORT]);
-	if (!st->stream.port && strcmp(out[RE_UDP_UL_PORT], "0"))
+	sp->rtp_endpoint.port = atoi(out[RE_UDP_UL_PORT]);
+	if (!sp->rtp_endpoint.port && strcmp(out[RE_UDP_UL_PORT], "0"))
 		goto fail;
 
 	if (out[RE_UDP_UL_FLAGS] && *out[RE_UDP_UL_FLAGS]) {
@@ -1944,17 +1949,17 @@ static int addr_parse_udp(struct stream_input *st, char **out) {
 		for (cp =out[RE_UDP_UL_FLAGS]; *cp && i < 2; cp++) {
 			c = chrtoupper(*cp);
 			if (c == 'E')
-				st->direction[i++] = DIR_EXTERNAL;
+				sp->direction[i++] = DIR_EXTERNAL;
 			else if (c == 'I')
-				st->direction[i++] = DIR_INTERNAL;
+				sp->direction[i++] = DIR_INTERNAL;
 		}
 	}
 
 	if (out[RE_UDP_UL_NUM] && *out[RE_UDP_UL_NUM])
-		st->stream.num = atoi(out[RE_UDP_UL_NUM]);
-	if (!st->stream.num)
-		st->stream.num = 1;
-	st->consecutive_num = 1;
+		sp->index = atoi(out[RE_UDP_UL_NUM]);
+	if (!sp->index)
+		sp->index = 1;
+	sp->consecutive_ports = 1;
 
 	return 0;
 fail:
@@ -1963,32 +1968,34 @@ fail:
 
 static str *call_update_lookup_udp(char **out, struct callmaster *m, enum call_opmode opmode, int tagidx) {
 	struct call *c;
+	struct call_monologue *monologue;
 	GQueue q = G_QUEUE_INIT;
-	struct stream_input st;
-	int num;
+	struct stream_params sp;
 	str *ret, callid, viabranch, tag;
 
 	str_init(&callid, out[RE_UDP_UL_CALLID]);
 	str_init(&viabranch, out[RE_UDP_UL_VIABRANCH]);
 	str_init(&tag, out[tagidx]);
 
-	c = call_get_opmode(&callid, &viabranch, m, opmode);
+	c = call_get_opmode(&callid, m, opmode);
 	if (!c) {
 		mylog(LOG_WARNING, LOG_PREFIX_CI "Got UDP LOOKUP for unknown call-id",
 			STR_FMT(&callid), STR_FMT(&viabranch));
 		return str_sprintf("%s 0 " IPF "\n", out[RE_UDP_COOKIE], IPP(m->conf.ipv4));
 	}
-	log_info = &viabranch;
+	//log_info = &viabranch;
+	monologue = call_get_monologue(c, &tag);
 
-	if (addr_parse_udp(&st, out))
+	if (addr_parse_udp(&sp, out))
 		goto fail;
 
-	g_queue_push_tail(&q, &st);
-	num = call_streams(c, &q, &tag, opmode);
+	g_queue_push_tail(&q, &sp);
+	/* XXX return value */
+	monologue_offer_answer(monologue, &q);
 	g_queue_clear(&q);
 
-	ret = streams_print(c->callstreams, num, opmode, out[RE_UDP_COOKIE], SAF_UDP);
-	mutex_unlock(&c->lock);
+	ret = streams_print(&monologue->medias, sp.index, sp.index, out[RE_UDP_COOKIE], SAF_UDP);
+	mutex_unlock(&c->master_lock);
 
 	redis_update(c, m->conf.redis);
 
@@ -1996,7 +2003,7 @@ static str *call_update_lookup_udp(char **out, struct callmaster *m, enum call_o
 	goto out;
 
 fail:
-	mutex_unlock(&c->lock);
+	mutex_unlock(&c->master_lock);
 	mylog(LOG_WARNING, "Failed to parse a media stream: %s/%s:%s", out[RE_UDP_UL_ADDR4], out[RE_UDP_UL_ADDR6], out[RE_UDP_UL_PORT]);
 	ret = str_sprintf("%s E8\n", out[RE_UDP_COOKIE]);
 out:
@@ -2014,6 +2021,7 @@ str *call_lookup_udp(char **out, struct callmaster *m) {
 
 static str *call_request_lookup_tcp(char **out, struct callmaster *m, enum call_opmode opmode, const char *tagstr) {
 	struct call *c;
+	struct call_monologue *monologue;
 	GQueue s = G_QUEUE_INIT;
 	int num;
 	str *ret = NULL, callid, tag;
@@ -2021,7 +2029,7 @@ static str *call_request_lookup_tcp(char **out, struct callmaster *m, enum call_
 
 	str_init(&callid, out[RE_TCP_RL_CALLID]);
 	infohash = g_hash_table_new(g_str_hash, g_str_equal);
-	c = call_get_opmode(&callid, NULL, m, opmode);
+	c = call_get_opmode(&callid, m, opmode);
 	if (!c) {
 		mylog(LOG_WARNING, LOG_PREFIX_C "Got LOOKUP for unknown call-id", STR_FMT(&callid));
 		goto out;
@@ -2030,10 +2038,13 @@ static str *call_request_lookup_tcp(char **out, struct callmaster *m, enum call_
 	info_parse(out[RE_TCP_RL_INFO], infohash, m);
 	streams_parse(out[RE_TCP_RL_STREAMS], m, &s);
 	str_init(&tag, g_hash_table_lookup(infohash, tagstr));
-	num = call_streams(c, &s, &tag, opmode);
 
-	ret = streams_print(c->callstreams, num, opmode, NULL, SAF_TCP);
-	mutex_unlock(&c->lock);
+	monologue = call_get_monologue(c, &tag);
+	/* XXX return value */
+	monologue_offer_answer(monologue, &s);
+
+	ret = streams_print(&monologue->medias, 1, s.length, NULL, SAF_TCP);
+	mutex_unlock(&c->master_lock);
 
 	streams_free(&s);
 
@@ -2054,7 +2065,9 @@ str *call_lookup_tcp(char **out, struct callmaster *m) {
 	return call_request_lookup_tcp(out, m, OP_ANSWER, "totag");
 }
 
-static int tags_match(const struct peer *p, const struct peer *px, const str *fromtag, const str *totag) {
+static int tags_match(const struct call_monologue *p, const struct call_monologue *px,
+		const str *fromtag, const str *totag)
+{
 	if (!fromtag || !fromtag->len)
 		return 1;
 	if (str_cmp_str(&p->tag, fromtag))
@@ -2497,7 +2510,7 @@ static const char *call_offer_answer_ng(bencode_item_t *input, struct callmaster
 
 	chopper = sdp_chopper_new(&sdp);
 	bencode_buffer_destroy_add(output->buffer, (free_func_t) sdp_chopper_destroy, chopper);
-	num = monologue_offer(monologue, &streams);
+	num = monologue_offer_answer(monologue, &streams);
 	ret = sdp_replace(chopper, &parsed, call, (num >= 0) ? opmode : (opmode ^ 1), &flags, streamhash);
 
 	mutex_unlock(&call->lock);

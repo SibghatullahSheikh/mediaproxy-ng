@@ -39,6 +39,7 @@ struct streamhandler;
 typedef bencode_buffer_t call_buffer_t;
 #define call_buffer_alloc bencode_buffer_alloc
 #define call_buffer_init bencode_buffer_init
+#define call_buffer_free bencode_buffer_free
 
 
 
@@ -289,7 +290,7 @@ const char *call_query_ng(bencode_item_t *, struct callmaster *, bencode_item_t 
 
 void calls_dump_redis(struct callmaster *);
 
-struct call *call_get_or_create(const str *callid, const str *viabranch, struct callmaster *m);
+struct call *call_get_or_create(const str *callid, struct callmaster *m);
 struct callstream *callstream_new(struct call *ca, int num);
 //void callstream_init(struct callstream *s, struct relays_cache *);
 void kernelize(struct packet_stream *);
