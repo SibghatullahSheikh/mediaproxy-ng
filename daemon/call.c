@@ -1828,9 +1828,10 @@ static struct call_monologue *__monologue_create(struct call *call) {
 
 	ret->call = call;
 	ret->created = poller_now;
-	g_queue_init(&ret->dialogues);
 	ret->other_tags = g_hash_table_new(str_hash, str_equal);
 	g_queue_init(&ret->medias);
+
+	call->monologues = g_list_prepend(call->monologues, ret);
 
 	return ret;
 }
@@ -1857,6 +1858,19 @@ static void __monologue_unkernelize(struct call_monologue *monologue) {
 			stream = m->data;
 			unkernelize(stream);
 		}
+	}
+}
+
+static void __monologue_destroy(struct call_monologue *monologue) {
+	struct call_monologue *dialogue;
+	GList *l;
+
+	l = g_hash_table_get_values(monologue->other_tags);
+
+	while (l) {
+		dialogue = l->data;
+		g_hash_table_remove(dialogue->other_tags, &monologue->tag);
+		l = l->next;
 	}
 }
 
@@ -2100,29 +2114,35 @@ static int call_delete_branch(struct callmaster *m, const str *callid, const str
 	const str *fromtag, const str *totag, bencode_item_t *output)
 {
 	struct call *c;
+	struct call_monologue *ml;
 	GList *l;
 	int ret;
+	const str *match_tag;
 
-	c = call_get(callid, NULL, m);
+	c = call_get(callid, m);
 	if (!c) {
 		mylog(LOG_INFO, LOG_PREFIX_C "Call-ID to delete not found", STR_FMT(callid));
 		goto err;
 	}
 
-	log_info = branch;
+	//log_info = branch;
 
-	for (l = c->callstreams->head; l; l = l->next) {
-		if (tags_match_cs(l->data, fromtag, totag))
-			goto tag_match;
+	if (!fromtag || !fromtag->s || !fromtag->len)
+		goto del_all;
+
+	match_tag = (totag && totag->s && totag->len) ? totag : fromtag;
+
+	ml = g_hash_table_lookup(c->tags, match_tag);
+	if (!ml) {
+		mylog(LOG_INFO, LOG_PREFIX_C "Tag '%.*s' in delete message not found, ignoring",
+				STR_FMT(match_tag), LOG_PARAMS_C(c));
+		goto err;
 	}
 
-	mylog(LOG_INFO, LOG_PREFIX_C "Tags didn't match for delete message, ignoring", LOG_PARAMS_C(c));
-	goto err;
-
-tag_match:
 	if (output)
 		ng_call_stats(c, fromtag, totag, output);
 
+/*
 	if (branch && branch->len) {
 		if (!g_hash_table_remove(c->branches, branch)) {
 			mylog(LOG_INFO, LOG_PREFIX_CI "Branch to delete doesn't exist", STR_FMT(&c->callid), STR_FMT(branch));
@@ -2135,8 +2155,12 @@ tag_match:
 		else
 			DBG("no branches left, deleting full call");
 	}
+*/
 
-	mutex_unlock(&c->lock);
+	__monologue_destroy(ml);
+
+del_all:
+	mutex_unlock(&c->master_lock);
 	mylog(LOG_INFO, LOG_PREFIX_C "Deleting full call", LOG_PARAMS_C(c));
 	call_destroy(c);
 	goto success;

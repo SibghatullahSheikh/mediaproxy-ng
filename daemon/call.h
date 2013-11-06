@@ -219,7 +219,6 @@ struct call_monologue {
 
 	str			tag;
 	time_t			created;
-	GQueue			dialogues;
 	GHashTable		*other_tags;
 	struct call_monologue	*active_dialogue;
 
