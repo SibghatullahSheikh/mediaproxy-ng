@@ -1399,6 +1399,13 @@ static int monologue_offer_answer(struct call_monologue *monologue, GQueue *stre
 		 * offer/answer. The OTHER side corresponds to what WILL BE sent to the
 		 * offerer or WAS sent to the answerer. */
 
+		if (sp->protocol == PROTO_UNKNOWN) {
+			if (media->protocol == PROTO_UNKNOWN)
+				media->protocol = PROTO_RTP_AVP;
+		}
+		else
+			media->protocol = sp->protocol;
+
 		other_media->rtcp_mux = sp->rtcp_mux;
 
 		/* determine number of consecutive ports needed locally. we don't
@@ -1439,6 +1446,8 @@ static int monologue_offer_answer(struct call_monologue *monologue, GQueue *stre
 				/* only possible in answer (?) - saved from offer */
 				if (media->rtcp_mux)
 					goto rtcp;
+
+				stream->has_rtcp_in_next = 1;
 
 				goto next;
 			}
@@ -2079,37 +2088,6 @@ str *call_lookup_tcp(char **out, struct callmaster *m) {
 	return call_request_lookup_tcp(out, m, OP_ANSWER, "totag");
 }
 
-static int tags_match(const struct call_monologue *p, const struct call_monologue *px,
-		const str *fromtag, const str *totag)
-{
-	if (!fromtag || !fromtag->len)
-		return 1;
-	if (str_cmp_str(&p->tag, fromtag))
-		return 0;
-	if (!totag || !totag->len)
-		return 1;
-	if (str_cmp_str(&px->tag, totag))
-		return 0;
-	return 1;
-}
-
-/* cs must be unlocked */
-static int tags_match_cs(struct callstream *cs, const str *fromtag, const str *totag) {
-	int i;
-
-	mutex_lock(&cs->lock);
-
-	for (i = 0; i < 2; i++) {
-		if (tags_match(&cs->peers[i], &cs->peers[i ^ 1], fromtag, totag)) {
-			mutex_unlock(&cs->lock);
-			return 1;
-		}
-	}
-
-	mutex_unlock(&cs->lock);
-	return 0;
-}
-
 static int call_delete_branch(struct callmaster *m, const str *callid, const str *branch,
 	const str *fromtag, const str *totag, bencode_item_t *output)
 {
@@ -2158,6 +2136,7 @@ static int call_delete_branch(struct callmaster *m, const str *callid, const str
 */
 
 	__monologue_destroy(ml);
+	goto success_unlock; /* XXX del full call */
 
 del_all:
 	mutex_unlock(&c->master_lock);
@@ -2166,14 +2145,14 @@ del_all:
 	goto success;
 
 success_unlock:
-	mutex_unlock(&c->lock);
+	mutex_unlock(&c->master_lock);
 success:
 	ret = 0;
 	goto out;
 
 err:
 	if (c)
-		mutex_unlock(&c->lock);
+		mutex_unlock(&c->master_lock);
 	ret = -1;
 	goto out;
 
@@ -2202,49 +2181,63 @@ str *call_delete_udp(char **out, struct callmaster *m) {
 }
 
 #define SSUM(x) \
-	stats->totals[0].x += p->rtps[0].stats.x; \
-	stats->totals[1].x += p->rtps[1].stats.x; \
-	stats->totals[2].x += px->rtps[0].stats.x; \
-	stats->totals[3].x += px->rtps[1].stats.x
+	stats->totals[0].x += stream->stats.x;
 /* call must be locked */
 static void stats_query(struct call *call, const str *fromtag, const str *totag, struct call_stats *stats,
-	void (*cb)(struct peer *, struct peer *, void *), void *arg)
+	void (*cb)(struct packet_stream *, void *), void *arg)
 {
-	GList *l;
-	struct callstream *cs;
-	int i;
-	struct peer *p, *px;
+	const str *match_tag;
+	struct call_monologue *ml;
+	struct call_media *media;
+	GList *l, *m_l = NULL;
+	struct packet_stream *stream;
 
 	ZERO(*stats);
 
-	for (l = call->callstreams->head; l; l = l->next) {
-		cs = l->data;
-		mutex_lock(&cs->lock);
+	match_tag = (totag && totag->s && totag->len) ? totag : fromtag;
+	if (!match_tag)
+		l = call->streams;
+	else {
+		ml = g_hash_table_lookup(call->tags, match_tag);
+		if (!ml)
+			goto out;
+		m_l = ml->medias.head;
 
-		for (i = 0; i < 2; i++) {
-			p = &cs->peers[i];
-			px = &cs->peers[i ^ 1];
-
-			if (p->rtps[0].last > stats->newest)
-				stats->newest = p->rtps[0].last;
-			if (p->rtps[1].last > stats->newest)
-				stats->newest = p->rtps[1].last;
-
-			if (!tags_match(p, px, fromtag, totag))
-				continue;
-
-			if (cb)
-				cb(p, px, arg);
-
-			SSUM(packets);
-			SSUM(bytes);
-			SSUM(errors);
-
-			break;
-		}
-
-		mutex_unlock(&cs->lock);
+m_l_restart:
+		if (!m_l)
+			goto out;
+		media = m_l->data;
+		l = media->streams.head;
 	}
+
+	while (l) {
+		stream = l->data;
+		mutex_lock(&stream->lock);
+
+		if (stream->last_packet > stats->newest)
+			stats->newest = stream->last_packet;
+
+		if (cb)
+			cb(stream, arg);
+
+		SSUM(packets);
+		SSUM(bytes);
+		SSUM(errors);
+
+		/* XXX more meaningful stats */
+
+		mutex_unlock(&stream->lock);
+
+		l = l->next;
+
+		if (!l && m_l) {
+			m_l = m_l->next;
+			goto m_l_restart;
+		}
+	}
+
+out:
+	;
 }
 
 str *call_query_udp(char **out, struct callmaster *m) {
@@ -2258,7 +2251,7 @@ str *call_query_udp(char **out, struct callmaster *m) {
 	str_init(&fromtag, out[RE_UDP_DQ_FROMTAG]);
 	str_init(&totag, out[RE_UDP_DQ_TOTAG]);
 
-	c = call_get_opmode(&callid, NULL, m, OP_OTHER);
+	c = call_get_opmode(&callid, m, OP_OTHER);
 	if (!c) {
 		mylog(LOG_INFO, LOG_PREFIX_C "Call-ID to query not found", STR_FMT(&callid));
 		goto err;
@@ -2266,7 +2259,7 @@ str *call_query_udp(char **out, struct callmaster *m) {
 
 	stats_query(c, &fromtag, &totag, &stats, NULL, NULL);
 
-	mutex_unlock(&c->lock);
+	mutex_unlock(&c->master_lock);
 
 	ret = str_sprintf("%s %lld "UINT64F" "UINT64F" "UINT64F" "UINT64F"\n", out[RE_UDP_COOKIE],
 		(long long int) m->conf.silent_timeout - (poller_now - stats.newest),
@@ -2276,7 +2269,7 @@ str *call_query_udp(char **out, struct callmaster *m) {
 
 err:
 	if (c)
-		mutex_unlock(&c->lock);
+		mutex_unlock(&c->master_lock);
 	ret = str_sprintf("%s E8\n", out[RE_UDP_COOKIE]);
 	goto out;
 
@@ -2305,45 +2298,15 @@ static void call_status_iterator(struct call *c, struct control_stream *s) {
 	char addr1[64], addr2[64], addr3[64];
 
 	m = c->callmaster;
-	mutex_lock(&c->lock);
+	mutex_lock(&c->master_lock);
 
 	control_stream_printf(s, "session %.*s - - - - %i\n",
 		STR_FMT(&c->callid),
 		(int) (poller_now - c->created));
 
-	for (l = c->callstreams->head; l; l = l->next) {
-		cs = l->data;
-		mutex_lock(&cs->lock);
+	/* XXX restore function */
 
-		p = &cs->peers[0];
-		r1 = &p->rtps[0];
-		r2 = &cs->peers[1].rtps[0];
-		rx1 = &p->rtps[1];
-		rx2 = &cs->peers[1].rtps[1];
-
-		if (r1->fd.fd == -1 || r2->fd.fd == -1)
-			goto next;
-
-		smart_ntop_p(addr1, &r1->peer.ip46, sizeof(addr1));
-		smart_ntop_p(addr2, &r2->peer.ip46, sizeof(addr2));
-		if (IN6_IS_ADDR_V4MAPPED(&r1->peer.ip46))
-			inet_ntop(AF_INET, &m->conf.ipv4, addr3, sizeof(addr3));
-		else
-			smart_ntop_p(addr3, &m->conf.ipv6, sizeof(addr3));
-
-		control_stream_printf(s, "stream %s:%u %s:%u %s:%u "UINT64F"/"UINT64F"/"UINT64F" %s %s - %i\n",
-			addr1, r1->peer.port,
-			addr2, r2->peer.port,
-			addr3, r1->fd.localport,
-			r1->stats.bytes + rx1->stats.bytes, r2->stats.bytes + rx2->stats.bytes,
-			r1->stats.bytes + rx1->stats.bytes + r2->stats.bytes + rx2->stats.bytes,
-			"active",
-			p->codec ? : "unknown",
-			(int) (poller_now - r1->last));
-next:
-		mutex_unlock(&cs->lock);
-	}
-	mutex_unlock(&c->lock);
+	mutex_unlock(&c->master_lock);
 }
 
 static void callmaster_get_all_calls_interator(void *key, void *val, void *ptr) {
@@ -2398,17 +2361,6 @@ void calls_dump_redis(struct callmaster *m) {
 
 void callmaster_config(struct callmaster *m, struct callmaster_config *c) {
 	m->conf = *c;
-}
-
-struct callstream *callstream_new(struct call *ca, int num) {
-	struct callstream *s;
-
-	s = obj_alloc0("callstream", sizeof(*s), callstream_free);
-	s->call = obj_get(ca);
-	s->num = num;
-	mutex_init(&s->lock);
-
-	return s;
 }
 
 
@@ -2501,10 +2453,9 @@ static const char *call_offer_answer_ng(bencode_item_t *input, struct callmaster
 	GQueue streams = G_QUEUE_INIT;
 	struct call *call;
 	struct call_monologue *monologue;
-	int ret, num;
+	int ret;
 	struct sdp_ng_flags flags;
 	struct sdp_chopper *chopper;
-	//GHashTable *streamhash;
 
 	if (!bencode_dictionary_get_str(input, "sdp", &sdp))
 		return "No SDP body in message";
@@ -2520,9 +2471,8 @@ static const char *call_offer_answer_ng(bencode_item_t *input, struct callmaster
 
 	call_ng_process_flags(&flags, input);
 
-	//streamhash = g_hash_table_new((GHashFunc) stream_hash, (GEqualFunc) stream_equal);
 	errstr = "Incomplete SDP specification";
-	if (sdp_streams(call, &parsed, &streams, &flags))
+	if (sdp_streams(&parsed, &streams, &flags))
 		goto out;
 
 	call = call_get_opmode(&callid, m, opmode);
@@ -2534,10 +2484,11 @@ static const char *call_offer_answer_ng(bencode_item_t *input, struct callmaster
 
 	chopper = sdp_chopper_new(&sdp);
 	bencode_buffer_destroy_add(output->buffer, (free_func_t) sdp_chopper_destroy, chopper);
-	num = monologue_offer_answer(monologue, &streams);
-	ret = sdp_replace(chopper, &parsed, call, (num >= 0) ? opmode : (opmode ^ 1), &flags, streamhash);
+	/* XXX return value */
+	monologue_offer_answer(monologue, &streams);
+	ret = sdp_replace(chopper, &parsed, monologue, &flags);
 
-	mutex_unlock(&call->lock);
+	mutex_unlock(&call->master_lock);
 	redis_update(call, m->conf.redis);
 	obj_put(call);
 

@@ -1024,10 +1024,10 @@ static int fill_relays(struct streamrelay **rtp, struct streamrelay **rtcp, GLis
 }
 
 static int replace_transport_protocol(struct sdp_chopper *chop,
-		struct sdp_media *media, struct streamrelay *sr)
+		struct sdp_media *media, struct call_media *cm)
 {
 	str *tp = &media->transport;
-	const char *new_tp = transport_protocol_strings[sr->peer.protocol];
+	const char *new_tp = transport_protocol_strings[cm->protocol];
 
 	if (!new_tp)
 		return 0; /* XXX correct? or give warning? */
@@ -1041,7 +1041,7 @@ static int replace_transport_protocol(struct sdp_chopper *chop,
 	return 0;
 }
 
-static int replace_media_port(struct sdp_chopper *chop, struct sdp_media *media, struct streamrelay *sr) {
+static int replace_media_port(struct sdp_chopper *chop, struct sdp_media *media, struct packet_stream *ps) {
 	str *port = &media->port;
 
 	if (!media->port_num)
@@ -1050,7 +1050,7 @@ static int replace_media_port(struct sdp_chopper *chop, struct sdp_media *media,
 	if (copy_up_to(chop, port))
 		return -1;
 
-	chopper_append_printf(chop, "%hu", sr->fd.localport);
+	chopper_append_printf(chop, "%hu", ps->fd.localport);
 
 	if (skip_over(chop, port))
 		return -1;
@@ -1059,20 +1059,20 @@ static int replace_media_port(struct sdp_chopper *chop, struct sdp_media *media,
 }
 
 static int replace_consecutive_port_count(struct sdp_chopper *chop, struct sdp_media *media,
-		struct streamrelay *rtp, GList *m, int off)
+		struct packet_stream *ps, GList *j)
 {
 	int cons;
-	struct streamrelay *sr;
+	struct packet_stream *ps_n;
 
 	if (media->port_count == 1)
 		return 0;
 
 	for (cons = 1; cons < media->port_count; cons++) {
-		m = m->next;
-		if (!m)
+		j = j->next;
+		if (!j)
 			goto warn;
-		fill_relays(&sr, NULL, m, off, NULL, media);
-		if (sr->fd.localport != rtp->fd.localport + cons * 2) {
+		ps_n = j->data;
+		if (ps_n->fd.localport != ps->fd.localport + cons * 2) {
 warn:
 			mylog(LOG_WARN, "Failed to handle consecutive ports");
 			break;
@@ -1111,7 +1111,7 @@ static int insert_ice_address_alt(struct sdp_chopper *chop, struct streamrelay *
 }
 
 static int replace_network_address(struct sdp_chopper *chop, struct network_address *address,
-		struct streamrelay *sr)
+		struct packet_stream *ps)
 {
 	char buf[64];
 	int len;
@@ -1122,9 +1122,9 @@ static int replace_network_address(struct sdp_chopper *chop, struct network_addr
 	if (copy_up_to(chop, &address->address_type))
 		return -1;
 
-	mutex_lock(&sr->up->up->lock);
-	call_stream_address(buf, sr->up, SAF_NG, &len);
-	mutex_unlock(&sr->up->up->lock);
+	mutex_lock(&sr->lock);
+	call_stream_address(buf, ps, SAF_NG, &len);
+	mutex_unlock(&sr->lock);
 	chopper_append_dup(chop, buf, len);
 
 	if (skip_over(chop, &address->address))
@@ -1456,32 +1456,40 @@ static int generate_crypto(struct sdp_media *media, struct sdp_ng_flags *flags,
 }
 
 
-int sdp_replace(struct sdp_chopper *chop, GQueue *sessions, struct call *call,
-		enum call_opmode opmode, struct sdp_ng_flags *flags, GHashTable *streamhash)
+int sdp_replace(struct sdp_chopper *chop, GQueue *sessions, struct call_monologue *monologue,
+		struct sdp_ng_flags *flags)
 {
 	struct sdp_session *session;
-	struct sdp_media *media;
-	GList *l, *k, *m;
-	int off, do_ice, r_flags;
+	struct sdp_media *sdp_media;
+	GList *l, *k, *m, *j;
+	int do_ice, r_flags, media_index;
 	struct stream_input si, *sip;
 	struct streamrelay *rtp, *rtcp;
 	unsigned long priority;
+	struct call_media *call_media;
+	struct packet_stream *ps, *ps_rtcp;
 
-	off = opmode;
-	m = call->callstreams->head;
+	m = monologue->medias.head;
 	do_ice = (flags->ice_force || (!has_ice(sessions) && !flags->ice_remove)) ? 1 : 0;
 
 	for (l = sessions->head; l; l = l->next) {
 		session = l->data;
-
-		fill_relays(&rtp, &rtcp, m, off, NULL, NULL);
+		if (!m)
+			goto error;
+		call_media = m->data;
+		if (call_media->index != 0)
+			goto error;
+		j = call_media->streams.head;
+		if (!j)
+			goto error;
+		ps = j->data;
 
 		if (session->origin.parsed && flags->replace_origin) {
-			if (replace_network_address(chop, &session->origin.address, rtp))
+			if (replace_network_address(chop, &session->origin.address, ps))
 				goto error;
 		}
 		if (session->connection.parsed) {
-			if (replace_network_address(chop, &session->connection.address, rtp))
+			if (replace_network_address(chop, &session->connection.address, ps))
 				goto error;
 		}
 
@@ -1493,32 +1501,29 @@ int sdp_replace(struct sdp_chopper *chop, GQueue *sessions, struct call *call,
 			chopper_append_c(chop, "a=ice-lite\r\n");
 		}
 
+		media_index = 0;
+
 		for (k = session->media_streams.head; k; k = k->next) {
-			media = k->data;
-
-			if (fill_stream(&si, media, 0, flags))
-				goto error;
-
-			sip = g_hash_table_lookup(streamhash, &si);
-			if (!sip)
-				goto error;
-			m = find_stream_num(m, sip->stream.num);
+			sdp_media = k->data;
 			if (!m)
 				goto error;
-			r_flags = fill_relays(&rtp, &rtcp, m, off, sip, media);
-
-			rtp->peer.protocol = flags->transport_protocol;
-			rtcp->peer.protocol = rtp->peer.protocol;
-
-			if (replace_media_port(chop, media, rtp))
+			call_media = m->data;
+			if (call_media->index != media_index)
 				goto error;
-			if (replace_consecutive_port_count(chop, media, rtp, m, off))
+			j = call_media->streams.head;
+			if (!j)
 				goto error;
-			if (replace_transport_protocol(chop, media, rtp))
+			ps = j->data;
+
+			if (replace_media_port(chop, sdp_media, ps))
+				goto error;
+			if (replace_consecutive_port_count(chop, sdp_media, ps, j))
+				goto error;
+			if (replace_transport_protocol(chop, sdp_media, call_media))
 				goto error;
 
 			if (media->connection.parsed && flags->replace_sess_conn) {
-				if (replace_network_address(chop, &media->connection.address, rtp))
+				if (replace_network_address(chop, &media->connection.address, ps))
 					goto error;
 			}
 
@@ -1527,21 +1532,29 @@ int sdp_replace(struct sdp_chopper *chop, GQueue *sessions, struct call *call,
 
 			copy_up_to_end_of(chop, &media->s);
 
+			ps_rtcp = NULL;
+			if (ps->has_rtcp_in_next) (
+				j = j->next;
+				if (!j)
+					goto error;
+				ps_rtcp = j->data;
+			}
+
 			if (!media->port_num) {
 				if (!attr_get_by_id(&media->attributes, ATTR_INACTIVE))
 					chopper_append_c(chop, "a=inactive\r\n");
-				continue;
+				goto next;
 			}
 
-			if (r_flags == 0) {
+			if (call_media->rtcp_mux) {
 				chopper_append_c(chop, "a=rtcp:");
-				chopper_append_printf(chop, "%hu", rtcp->fd.localport);
-				chopper_append_c(chop, "\r\n");
-			}
-			else if (r_flags == 2) {
-				chopper_append_c(chop, "a=rtcp:");
-				chopper_append_printf(chop, "%hu", rtp->fd.localport);
+				chopper_append_printf(chop, "%hu", ps->fd.localport);
 				chopper_append_c(chop, "\r\na=rtcp-mux\r\n");
+			}
+			else if (ps_rtcp) {
+				chopper_append_c(chop, "a=rtcp:");
+				chopper_append_printf(chop, "%hu", ps_rtcp->fd.localport);
+				chopper_append_c(chop, "\r\n");
 			}
 
 			generate_crypto(media, flags, rtp, rtcp, chop);
@@ -1583,6 +1596,10 @@ int sdp_replace(struct sdp_chopper *chop, GQueue *sessions, struct call *call,
 							priority, media);
 				}
 			}
+
+next:
+			media_index++;
+			m = m->next;
 		}
 	}
 

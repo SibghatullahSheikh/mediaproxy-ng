@@ -39,7 +39,7 @@ void sdp_init(void);
 int sdp_parse(str *body, GQueue *sessions);
 int sdp_streams(const GQueue *sessions, GQueue *streams, struct sdp_ng_flags *);
 void sdp_free(GQueue *sessions);
-int sdp_replace(struct sdp_chopper *, GQueue *, struct call *, enum call_opmode, struct sdp_ng_flags *, GHashTable *);
+int sdp_replace(struct sdp_chopper *, GQueue *, struct call_monologue *, struct sdp_ng_flags *);
 
 struct sdp_chopper *sdp_chopper_new(str *input);
 void sdp_chopper_destroy(struct sdp_chopper *chop);

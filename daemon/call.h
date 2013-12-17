@@ -184,6 +184,7 @@ struct packet_stream {
 	time_t			last_packet;
 
 	int			rtcp:1;
+	int			has_rtcp_in_next:1;
 	int			implicit_rtcp:1;
 	int			stun:1;
 	int			filled:1;
