@@ -1365,7 +1365,7 @@ static int has_ice(GQueue *sessions) {
 }
 
 static int generate_crypto(struct sdp_media *media, struct sdp_ng_flags *flags,
-		struct streamrelay *rtp, struct streamrelay *rtcp,
+		struct packet_stream *rtp, struct packet_stream *rtcp,
 		struct sdp_chopper *chop)
 {
 	struct crypto_context *c, *src = NULL;
