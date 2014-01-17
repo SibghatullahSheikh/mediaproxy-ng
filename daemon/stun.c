@@ -322,15 +322,15 @@ static int check_fingerprint(str *msg, struct stun_attrs *attrs) {
 	return 0;
 }
 
-static int check_auth(str *msg, struct stun_attrs *attrs, struct peer *peer) {
+static int check_auth(str *msg, struct stun_attrs *attrs, struct call_media *media) {
 	u_int16_t lenX;
 	char digest[20];
 	str ufrag[2];
 	struct iovec iov[3];
 
-	if (!peer->ice_ufrag.s || !peer->ice_ufrag.len)
+	if (!media->ice_ufrag.s || !media->ice_ufrag.len)
 		return -1;
-	if (!peer->ice_pwd.s || !peer->ice_pwd.len)
+	if (!media->ice_pwd.s || !media->ice_pwd.len)
 		return -1;
 
 	ufrag[0] = attrs->username;
@@ -342,7 +342,7 @@ static int check_auth(str *msg, struct stun_attrs *attrs, struct peer *peer) {
 
 	if (!ufrag[0].len || !ufrag[1].len)
 		return -1;
-	if (str_cmp_str(&ufrag[0], &peer->ice_ufrag))
+	if (str_cmp_str(&ufrag[0], &media->ice_ufrag))
 		return -1;
 
 	lenX = htons((attrs->msg_integrity_attr - msg->s) - 20 + 24);
@@ -353,13 +353,13 @@ static int check_auth(str *msg, struct stun_attrs *attrs, struct peer *peer) {
 	iov[2].iov_base = msg->s + OFFSET_OF(struct header, cookie);
 	iov[2].iov_len = ntohs(lenX) + - 24 + 20 - OFFSET_OF(struct header, cookie);
 
-	__integrity(iov, G_N_ELEMENTS(iov), &peer->ice_pwd, digest);
+	__integrity(iov, G_N_ELEMENTS(iov), &media->ice_pwd, digest);
 
 	return memcmp(digest, attrs->msg_integrity.s, 20) ? -1 : 0;
 }
 
 static int stun_binding_success(int fd, struct header *req, struct stun_attrs *attrs,
-		struct sockaddr_in6 *sin, struct peer *peer)
+		struct sockaddr_in6 *sin, struct call_media *media)
 {
 	struct header hdr;
 	struct xor_mapped_address xma;
@@ -385,7 +385,7 @@ static int stun_binding_success(int fd, struct header *req, struct stun_attrs *a
 		output_add(&mh, &xma, STUN_XOR_MAPPED_ADDRESS);
 	}
 
-	integrity(&mh, &mi, &peer->ice_pwd);
+	integrity(&mh, &mi, &media->ice_pwd);
 	fingerprint(&mh, &fp);
 
 	output_finish(&mh);
@@ -403,13 +403,13 @@ static inline int u_int16_t_arr_len(u_int16_t *arr) {
 
 
 #define SLF " on port %hu from %s"
-#define SLP sr->fd.localport, addr
+#define SLP ps->fd.localport, addr
 /* return values:
  * 0  = stun packet processed successfully
  * -1 = stun packet not processed, processing should continue as non-stun packet
  * 1  = stun packet processed and "use candidate" was set
  */
-int stun(str *b, struct packet_stream *sr, struct sockaddr_in6 *sin) {
+int stun(str *b, struct packet_stream *ps, struct sockaddr_in6 *sin) {
 	struct header *req = (void *) b->s;
 	int msglen, method, class;
 	str attr_str;
@@ -442,7 +442,7 @@ int stun(str *b, struct packet_stream *sr, struct sockaddr_in6 *sin) {
 			goto ignore;
 		mylog(LOG_WARNING, "STUN packet contained unknown "
 				"\"comprehension required\" attribute(s)" SLF, SLP);
-		stun_error_attrs(sr->fd.fd, sin, req, 420, "Unknown attribute",
+		stun_error_attrs(ps->fd.fd, sin, req, 420, "Unknown attribute",
 				STUN_UNKNOWN_ATTRIBUTES, unknowns,
 				u_int16_t_arr_len(unknowns) * 2);
 		return 0;
@@ -464,21 +464,21 @@ int stun(str *b, struct packet_stream *sr, struct sockaddr_in6 *sin) {
 	err = "FINGERPRINT mismatch";
 	if (check_fingerprint(b, &attrs))
 		goto ignore;
-	if (check_auth(b, &attrs, sr->up))
+	if (check_auth(b, &attrs, ps->media))
 		goto unauth;
 
 	mylog(LOG_NOTICE, "Successful STUN binding request" SLF, SLP);
-	stun_binding_success(sr->fd.fd, req, &attrs, sin, sr->up);
+	stun_binding_success(ps->fd.fd, req, &attrs, sin, ps->media);
 
 	return attrs.use ? 1 : 0;
 
 bad_req:
 	mylog(LOG_INFO, "Received invalid STUN packet" SLF ": %s", SLP, err);
-	stun_error(sr->fd.fd, sin, req, 400, "Bad request");
+	stun_error(ps->fd.fd, sin, req, 400, "Bad request");
 	return 0;
 unauth:
 	mylog(LOG_INFO, "STUN authentication mismatch" SLF, SLP);
-	stun_error(sr->fd.fd, sin, req, 401, "Unauthorized");
+	stun_error(ps->fd.fd, sin, req, 401, "Unauthorized");
 	return 0;
 ignore:
 	mylog(LOG_INFO, "Not handling potential STUN packet" SLF ": %s", SLP, err);
