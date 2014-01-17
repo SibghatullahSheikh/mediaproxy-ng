@@ -888,26 +888,27 @@ int sdp_streams(const GQueue *sessions, GQueue *streams, struct sdp_ng_flags *fl
 
 			if (attr_get_by_id(&media->attributes, ATTR_RTCP_MUX)) {
 				sp->rtcp_mux = 1;
-				continue;
+				goto next;
 			}
 
 			if (media->port_count != 1)
-				continue;
+				goto next;
 
 			attr = attr_get_by_id(&media->attributes, ATTR_RTCP);
 			if (!attr) {
 				sp->implicit_rtcp = 1;
-				continue;
+				goto next;
 			}
 			if (attr->u.rtcp.port_num == sp->rtp_endpoint.port) {
 				sp->rtcp_mux = 1;
-				continue;
+				goto next;
 			}
 			errstr = "Invalid RTCP attribute";
 			if (fill_endpoint(&sp->rtcp_endpoint, media, flags, &attr->u.rtcp.address,
 						attr->u.rtcp.port_num))
 				goto error;
 
+next:
 			g_queue_push_tail(streams, sp);
 		}
 	}
