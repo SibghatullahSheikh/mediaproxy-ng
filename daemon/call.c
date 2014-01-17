@@ -379,13 +379,13 @@ static int call_savp2avp_rtp(str *s, struct packet_stream *stream) {
 static int call_savp2avp_rtcp(str *s, struct packet_stream *stream) {
 	return rtcp_savp2avp(s, &stream->crypto.in);
 }
-static int call_avpf2savp_rtcp(str *s, struct packet_stream *stream) {
-	int ret;
-	ret = rtcp_avpf2avp(s);
-	if (ret < 0)
-		return ret;
-	return rtcp_avp2savp(s, &stream->crypto.out);
-}
+//static int call_avpf2savp_rtcp(str *s, struct packet_stream *stream) {
+//	int ret;
+//	ret = rtcp_avpf2avp(s);
+//	if (ret < 0)
+//		return ret;
+//	return rtcp_avp2savp(s, &stream->crypto.out);
+//}
 static int call_savpf2avp_rtcp(str *s, struct packet_stream *stream) {
 	int ret;
 	ret = rtcp_savp2avp(s, &stream->crypto.in);
@@ -393,16 +393,16 @@ static int call_savpf2avp_rtcp(str *s, struct packet_stream *stream) {
 		return ret;
 	return rtcp_avpf2avp(s);
 }
-static int call_savpf2savp_rtcp(str *s, struct packet_stream *stream) {
-	int ret;
-	ret = rtcp_savp2avp(s, &stream->crypto.in);
-	if (ret < 0)
-		return ret;
-	ret = rtcp_avpf2avp(s);
-	if (ret < 0)
-		return ret;
-	return rtcp_avp2savp(s, &stream->crypto.out);
-}
+//static int call_savpf2savp_rtcp(str *s, struct packet_stream *stream) {
+//	int ret;
+//	ret = rtcp_savp2avp(s, &stream->crypto.in);
+//	if (ret < 0)
+//		return ret;
+//	ret = rtcp_avpf2avp(s);
+//	if (ret < 0)
+//		return ret;
+//	return rtcp_avp2savp(s, &stream->crypto.out);
+//}
 
 
 static int __k_null(struct mediaproxy_srtp *s, struct packet_stream *stream) {
@@ -1379,7 +1379,7 @@ static int monologue_offer_answer(struct call_monologue *monologue, GQueue *stre
 	struct call_media *media, *other_media;
 	unsigned int i, num_ports;
 	struct call_monologue *other_ml = monologue->active_dialogue;
-	struct packet_stream *stream, *other_stream;
+	struct packet_stream *stream, *other_stream = NULL;
 
 	/* we must have a complete dialogue, even though the to-tag (other_ml->tag)
 	 * may not be known yet */
