@@ -1488,7 +1488,7 @@ int sdp_replace(struct sdp_chopper *chop, GQueue *sessions, struct call_monologu
 		if (!m)
 			goto error;
 		call_media = m->data;
-		if (call_media->index != 0)
+		if (call_media->index != 1)
 			goto error;
 		j = call_media->streams.head;
 		if (!j)
@@ -1512,7 +1512,7 @@ int sdp_replace(struct sdp_chopper *chop, GQueue *sessions, struct call_monologu
 			chopper_append_c(chop, "a=ice-lite\r\n");
 		}
 
-		media_index = 0;
+		media_index = 1;
 
 		for (k = session->media_streams.head; k; k = k->next) {
 			sdp_media = k->data;

@@ -1338,6 +1338,7 @@ static int __num_media_streams(struct call_media *media, unsigned int num_ports)
 		return 0;
 	if (num_ports > G_N_ELEMENTS(fd_arr))
 		return -1;
+	memset(fd_arr, -1, sizeof(fd_arr));
 	if (get_consecutive_ports(fd_arr, num_ports, 0, call))
 		return -1;
 
@@ -1353,6 +1354,7 @@ static int __num_media_streams(struct call_media *media, unsigned int num_ports)
 		g_queue_push_tail(&media->streams, stream);
 		call->streams = g_list_prepend(call->streams, stream);
 
+		ZERO(pi);
 		pi.fd = stream->fd.fd;
 		pi.obj = &stream->obj;
 		pi.readable = stream_readable;
@@ -1680,6 +1682,7 @@ done:
 int call_stream_address(char *o, struct packet_stream *ps, enum stream_address_format format, int *len) {
 	csa_func f;
 
+	ps = ps->rtcp_sink ? : ps->rtp_sink;
 	f = __call_stream_address(ps, 0);
 	return f(o, ps, format, len);
 }
@@ -1687,6 +1690,7 @@ int call_stream_address(char *o, struct packet_stream *ps, enum stream_address_f
 int call_stream_address_alt(char *o, struct packet_stream *ps, enum stream_address_format format, int *len) {
 	csa_func f;
 
+	ps = ps->rtcp_sink ? : ps->rtp_sink;
 	f = __call_stream_address(ps, 1);
 	return f ? f(o, ps, format, len) : -1;
 }
