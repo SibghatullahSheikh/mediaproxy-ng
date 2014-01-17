@@ -1296,11 +1296,14 @@ static struct call_media *__get_media(struct call_monologue *ml, GList **it, con
 	/* possible incremental update, hunt for correct media struct */
 	while (*it) {
 		med = (*it)->data;
-		if (med->index == sp->index)
+		if (med->index == sp->index) {
+			DBG("found existing call_media for stream #%u", sp->index);
 			return med;
+		}
 		*it = (*it)->next;
 	}
 
+	DBG("allocating new call_media for stream #%u", sp->index);
 	med = g_slice_alloc0(sizeof(*med));
 	med->monologue = ml;
 	med->call = ml->call;
@@ -1330,6 +1333,7 @@ static int __num_media_streams(struct call_media *media, unsigned int num_ports)
 	struct poller_item pi;
 	struct poller *po = call->callmaster->poller;
 
+	DBG("media stream #%u wants %u ports", media->index, num_ports);
 	if (media->streams.length >= num_ports)
 		return 0;
 	if (num_ports > G_N_ELEMENTS(fd_arr))
@@ -1340,6 +1344,7 @@ static int __num_media_streams(struct call_media *media, unsigned int num_ports)
 	g_queue_clear(&media->streams);
 
 	for (i = 0; i < num_ports; i++) {
+		DBG("allocating new packet_stream for port #%u in stream #%u", i, media->index);
 		stream = obj_alloc0("packet_stream", sizeof(*stream), stream_free);
 		mutex_init(&stream->lock);
 		stream->call = obj_get(call);
@@ -1390,6 +1395,7 @@ static int monologue_offer_answer(struct call_monologue *monologue, GQueue *stre
 
 	for (media_iter = streams->head; media_iter; media_iter = media_iter->next) {
 		sp = media_iter->data;
+		DBG("processing media stream #%u", sp->index);
 
 		/* first, check for existance of call_media struct on both sides of
 		 * the dialogue */
@@ -1495,6 +1501,7 @@ next:
 	return 0;
 
 error:
+	mylog(LOG_ERR, "Error allocating media ports");
 	return -1;
 }
 
