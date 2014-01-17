@@ -2504,7 +2504,6 @@ static const char *call_offer_answer_ng(bencode_item_t *input, struct callmaster
 out:
 	sdp_free(&parsed);
 	streams_free(&streams);
-	g_hash_table_destroy(streamhash);
 	log_info = NULL;
 
 	return errstr;
@@ -2541,6 +2540,7 @@ void callmaster_exclude_port(struct callmaster *m, u_int16_t p) {
 	mutex_unlock(&m->portlock);
 }
 
+#if 0
 static bencode_item_t *peer_address(bencode_buffer_t *b, struct stream *s) {
 	bencode_item_t *d;
 	char buf[64];
@@ -2559,6 +2559,7 @@ static bencode_item_t *peer_address(bencode_buffer_t *b, struct stream *s) {
 
 	return d;
 }
+#endif
 
 static bencode_item_t *stats_encode(bencode_buffer_t *b, struct stats *s) {
 	bencode_item_t *d;
@@ -2570,16 +2571,17 @@ static bencode_item_t *stats_encode(bencode_buffer_t *b, struct stats *s) {
 	return d;
 }
 
-static bencode_item_t *streamrelay_stats(bencode_buffer_t *b, struct streamrelay *r) {
+static bencode_item_t *streamrelay_stats(bencode_buffer_t *b, struct packet_stream *ps) {
 	bencode_item_t *d;
 
 	d = bencode_dictionary(b);
 
-	bencode_dictionary_add(d, "counters", stats_encode(b, &r->stats));
-	bencode_dictionary_add(d, "peer address", peer_address(b, &r->peer));
-	bencode_dictionary_add(d, "advertised peer address", peer_address(b, &r->peer_advertised));
+	// XXX
+	//bencode_dictionary_add(d, "counters", stats_encode(b, &r->stats));
+	//bencode_dictionary_add(d, "peer address", peer_address(b, &r->peer));
+	//bencode_dictionary_add(d, "advertised peer address", peer_address(b, &r->peer_advertised));
 
-	bencode_dictionary_add_integer(d, "local port", r->fd.localport);
+	bencode_dictionary_add_integer(d, "local port", ps->fd.localport);
 
 	return d;
 }
@@ -2592,6 +2594,8 @@ static bencode_item_t *rtp_rtcp_stats(bencode_buffer_t *b, struct stats *rtp, st
 	return s;
 }
 
+#if 0
+XXX
 static bencode_item_t *peer_stats(bencode_buffer_t *b, struct peer *p) {
 	bencode_item_t *d, *s;
 
@@ -2623,6 +2627,7 @@ static void ng_stats_cb(struct peer *p, struct peer *px, void *streams) {
 	bencode_list_add(stream, peer_stats(stream->buffer, p));
 	bencode_list_add(stream, peer_stats(stream->buffer, px));
 }
+#endif
 
 /* call must be locked */
 static void ng_call_stats(struct call *call, const str *fromtag, const str *totag, bencode_item_t *output) {
@@ -2632,7 +2637,7 @@ static void ng_call_stats(struct call *call, const str *fromtag, const str *tota
 	bencode_dictionary_add_integer(output, "created", call->created);
 
 	streams = bencode_dictionary_add_list(output, "streams");
-	stats_query(call, fromtag, totag, &stats, ng_stats_cb, streams);
+	//stats_query(call, fromtag, totag, &stats, ng_stats_cb, streams); XXX
 
 	dict = bencode_dictionary_add_dictionary(output, "totals");
 	bencode_dictionary_add(dict, "input", rtp_rtcp_stats(output->buffer, &stats.totals[0], &stats.totals[1]));
@@ -2645,7 +2650,7 @@ const char *call_query_ng(bencode_item_t *input, struct callmaster *m, bencode_i
 
 	if (!bencode_dictionary_get_str(input, "call-id", &callid))
 		return "No call-id in message";
-	call = call_get_opmode(&callid, NULL, m, OP_OTHER);
+	call = call_get_opmode(&callid, m, OP_OTHER);
 	if (!call)
 		return "Unknown call-id";
 	bencode_dictionary_get_str(input, "from-tag", &fromtag);
@@ -2653,7 +2658,7 @@ const char *call_query_ng(bencode_item_t *input, struct callmaster *m, bencode_i
 
 	bencode_dictionary_add_string(output, "result", "ok");
 	ng_call_stats(call, &fromtag, &totag, output);
-	mutex_unlock(&call->lock);
+	mutex_unlock(&call->master_lock);
 
 	return NULL;
 }

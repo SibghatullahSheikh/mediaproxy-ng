@@ -156,7 +156,7 @@ static str ice_foundation_str_alt;
 
 
 
-static int has_rtcp(struct sdp_media *media);
+//static int has_rtcp(struct sdp_media *media);
 
 
 
@@ -755,6 +755,7 @@ void sdp_free(GQueue *sessions) {
 	}
 }
 
+#if 0
 static int fill_stream_address(struct stream_input *si, struct sdp_media *media, struct sdp_ng_flags *flags) {
 	struct sdp_session *session = media->session;
 
@@ -782,6 +783,7 @@ static int fill_stream_address(struct stream_input *si, struct sdp_media *media,
 		return -1;
 	return 0;
 }
+#endif
 
 static int fill_endpoint(struct endpoint *ep, const struct sdp_media *media, struct sdp_ng_flags *flags,
 		struct network_address *address, long int port) {
@@ -822,6 +824,7 @@ static int fill_endpoint(struct endpoint *ep, const struct sdp_media *media, str
 	return 0;
 }
 
+#if 0
 static int fill_stream(struct stream_input *si, struct sdp_media *media, int offset, struct sdp_ng_flags *flags) {
 	if (fill_stream_address(si, media, flags))
 		return -1;
@@ -838,6 +841,7 @@ static int fill_stream_rtcp(struct stream_input *si, struct sdp_media *media, in
 	si->stream.port = port;
 	return 0;
 }
+#endif
 
 int sdp_streams(const GQueue *sessions, GQueue *streams, struct sdp_ng_flags *flags) {
 	struct sdp_session *session;
@@ -1003,6 +1007,7 @@ static int skip_over(struct sdp_chopper *chop, str *where) {
 	return 0;
 }
 
+#if 0
 static int fill_relays(struct streamrelay **rtp, struct streamrelay **rtcp, GList *m,
 		int off, struct stream_input *sip, struct sdp_media *media)
 {
@@ -1022,6 +1027,7 @@ static int fill_relays(struct streamrelay **rtp, struct streamrelay **rtcp, GLis
 
 	return 0;
 }
+#endif
 
 static int replace_transport_protocol(struct sdp_chopper *chop,
 		struct sdp_media *media, struct call_media *cm)
@@ -1084,28 +1090,28 @@ warn:
 	return 0;
 }
 
-static int insert_ice_address(struct sdp_chopper *chop, struct streamrelay *sr) {
+static int insert_ice_address(struct sdp_chopper *chop, struct packet_stream *ps) {
 	char buf[64];
 	int len;
 
-	mutex_lock(&sr->up->up->lock);
-	call_stream_address(buf, sr->up, SAF_ICE, &len);
-	mutex_unlock(&sr->up->up->lock);
+	// mutex_lock(&sr->up->up->lock); XXX locking
+	call_stream_address(buf, ps, SAF_ICE, &len);
+	//mutex_unlock(&sr->up->up->lock);
 	chopper_append_dup(chop, buf, len);
-	chopper_append_printf(chop, " %hu", sr->fd.localport);
+	chopper_append_printf(chop, " %hu", ps->fd.localport);
 
 	return 0;
 }
 
-static int insert_ice_address_alt(struct sdp_chopper *chop, struct streamrelay *sr) {
+static int insert_ice_address_alt(struct sdp_chopper *chop, struct packet_stream *ps) {
 	char buf[64];
 	int len;
 
-	mutex_lock(&sr->up->up->lock);
-	call_stream_address_alt(buf, sr->up, SAF_ICE, &len);
-	mutex_unlock(&sr->up->up->lock);
+	// mutex_lock(&sr->up->up->lock); XXX locking
+	call_stream_address_alt(buf, ps, SAF_ICE, &len);
+	//mutex_unlock(&sr->up->up->lock);
 	chopper_append_dup(chop, buf, len);
-	chopper_append_printf(chop, " %hu", sr->fd.localport);
+	chopper_append_printf(chop, " %hu", ps->fd.localport);
 
 	return 0;
 }
@@ -1122,9 +1128,9 @@ static int replace_network_address(struct sdp_chopper *chop, struct network_addr
 	if (copy_up_to(chop, &address->address_type))
 		return -1;
 
-	mutex_lock(&sr->lock);
+	// mutex_lock(&sr->lock); XXX locking
 	call_stream_address(buf, ps, SAF_NG, &len);
-	mutex_unlock(&sr->lock);
+	//mutex_unlock(&sr->lock);
 	chopper_append_dup(chop, buf, len);
 
 	if (skip_over(chop, &address->address))
@@ -1245,6 +1251,7 @@ strip:
 	return 0;
 }
 
+#if 0
 static GList *find_stream_num(GList *m, int num) {
 	/* XXX use a hash instead? must link input streams to output streams */
 	while (m && ((struct callstream *) m->data)->num < num)
@@ -1267,6 +1274,7 @@ static int has_rtcp(struct sdp_media *media) {
 		return 1;
 	return 0;
 }
+#endif
 
 static unsigned long prio_calc(unsigned int pref) {
 	return (1 << 24) * 126 + (1 << 8) * pref + 256 * 1;
@@ -1303,7 +1311,7 @@ out:
 	return prio;
 }
 
-static void insert_candidates(struct sdp_chopper *chop, struct streamrelay *rtp, struct streamrelay *rtcp,
+static void insert_candidates(struct sdp_chopper *chop, struct packet_stream *rtp, struct packet_stream *rtcp,
 		unsigned long priority, struct sdp_media *media)
 {
 	chopper_append_c(chop, "a=candidate:");
@@ -1323,7 +1331,7 @@ static void insert_candidates(struct sdp_chopper *chop, struct streamrelay *rtp,
 
 }
 
-static void insert_candidates_alt(struct sdp_chopper *chop, struct streamrelay *rtp, struct streamrelay *rtcp,
+static void insert_candidates_alt(struct sdp_chopper *chop, struct packet_stream *rtp, struct packet_stream *rtcp,
 		unsigned long priority, struct sdp_media *media)
 {
 	chopper_append_c(chop, "a=candidate:");
@@ -1377,29 +1385,30 @@ static int generate_crypto(struct sdp_media *media, struct sdp_ng_flags *flags,
 			&& flags->transport_protocol != PROTO_RTP_SAVPF)
 		return 0;
 
+	// XXX locking here
 	if (attr_get_by_id(&media->attributes, ATTR_CRYPTO)) {
 		/* SRTP <> SRTP case, copy from other stream
 		 * and leave SDP untouched */
-		src = &rtp->other->crypto.in;
+		src = &rtp->rtp_sink->crypto.in;
 
-		mutex_lock(&rtp->up->up->lock);
+		// mutex_lock(&rtp->up->up->lock);
 		c = &rtp->crypto.out;
 		if (!c->crypto_suite)
 			*c = *src;
-		mutex_unlock(&rtp->up->up->lock);
+		//mutex_unlock(&rtp->up->up->lock);
 
 		if (rtcp) {
-			mutex_lock(&rtcp->up->up->lock);
+			//mutex_lock(&rtcp->up->up->lock);
 			c = &rtcp->crypto.out;
 			if (!c->crypto_suite)
 				*c = *src;
-			mutex_unlock(&rtcp->up->up->lock);
+			//mutex_unlock(&rtcp->up->up->lock);
 		}
 
 		return 0;
 	}
 
-	mutex_lock(&rtp->up->up->lock);
+	// mutex_lock(&rtp->up->up->lock);
 
 	/* write-once, read-only */
 	c = &rtp->crypto.out;
@@ -1415,7 +1424,7 @@ static int generate_crypto(struct sdp_media *media, struct sdp_ng_flags *flags,
 		c->tag = rtp->crypto.in.tag;
 	}
 
-	mutex_unlock(&rtp->up->up->lock);
+	// mutex_unlock(&rtp->up->up->lock);
 
 	assert(sizeof(b64_buf) >= (((c->crypto_suite->master_key_len
 				+ c->crypto_suite->master_salt_len)) / 3 + 1) * 4 + 4);
@@ -1430,7 +1439,7 @@ static int generate_crypto(struct sdp_media *media, struct sdp_ng_flags *flags,
 	p += g_base64_encode_close(0, p, &state, &save);
 
 	if (rtcp) {
-		mutex_lock(&rtcp->up->up->lock);
+		//mutex_lock(&rtcp->up->up->lock);
 
 		src = c;
 		c = &rtcp->crypto.out;
@@ -1442,7 +1451,7 @@ static int generate_crypto(struct sdp_media *media, struct sdp_ng_flags *flags,
 		memcpy(c->master_salt, src->master_salt,
 				c->crypto_suite->master_salt_len);
 
-		mutex_unlock(&rtcp->up->up->lock);
+		//mutex_unlock(&rtcp->up->up->lock);
 	}
 
 	chopper_append_c(chop, "a=crypto:");
@@ -1462,15 +1471,16 @@ int sdp_replace(struct sdp_chopper *chop, GQueue *sessions, struct call_monologu
 	struct sdp_session *session;
 	struct sdp_media *sdp_media;
 	GList *l, *k, *m, *j;
-	int do_ice, r_flags, media_index;
-	struct stream_input si, *sip;
-	struct streamrelay *rtp, *rtcp;
+	int do_ice,  media_index;
 	unsigned long priority;
 	struct call_media *call_media;
 	struct packet_stream *ps, *ps_rtcp;
+	struct call *call;
 
+	// XXX check locking
 	m = monologue->medias.head;
 	do_ice = (flags->ice_force || (!has_ice(sessions) && !flags->ice_remove)) ? 1 : 0;
+	call = monologue->call;
 
 	for (l = sessions->head; l; l = l->next) {
 		session = l->data;
@@ -1522,26 +1532,26 @@ int sdp_replace(struct sdp_chopper *chop, GQueue *sessions, struct call_monologu
 			if (replace_transport_protocol(chop, sdp_media, call_media))
 				goto error;
 
-			if (media->connection.parsed && flags->replace_sess_conn) {
-				if (replace_network_address(chop, &media->connection.address, ps))
+			if (sdp_media->connection.parsed && flags->replace_sess_conn) {
+				if (replace_network_address(chop, &sdp_media->connection.address, ps))
 					goto error;
 			}
 
-			if (process_media_attributes(chop, &media->attributes, flags))
+			if (process_media_attributes(chop, &sdp_media->attributes, flags))
 				goto error;
 
-			copy_up_to_end_of(chop, &media->s);
+			copy_up_to_end_of(chop, &sdp_media->s);
 
 			ps_rtcp = NULL;
-			if (ps->has_rtcp_in_next) (
+			if (ps->has_rtcp_in_next) {
 				j = j->next;
 				if (!j)
 					goto error;
 				ps_rtcp = j->data;
 			}
 
-			if (!media->port_num) {
-				if (!attr_get_by_id(&media->attributes, ATTR_INACTIVE))
+			if (!sdp_media->port_num) {
+				if (!attr_get_by_id(&sdp_media->attributes, ATTR_INACTIVE))
 					chopper_append_c(chop, "a=inactive\r\n");
 				goto next;
 			}
@@ -1557,43 +1567,37 @@ int sdp_replace(struct sdp_chopper *chop, GQueue *sessions, struct call_monologu
 				chopper_append_c(chop, "\r\n");
 			}
 
-			generate_crypto(media, flags, rtp, rtcp, chop);
+			generate_crypto(sdp_media, flags, ps, ps_rtcp, chop);
 
 			if (do_ice) {
-				mutex_lock(&rtp->up->up->lock);
-				if (!rtp->up->ice_ufrag.s) {
-					create_random_ice_string(call, &rtp->up->ice_ufrag, 8);
-					create_random_ice_string(call, &rtp->up->ice_pwd, 28);
+				// XXX locking here
+				// mutex_lock(&rtp->up->up->lock);
+				if (!call_media->ice_ufrag.s) {
+					create_random_ice_string(call, &call_media->ice_ufrag, 8);
+					create_random_ice_string(call, &call_media->ice_pwd, 28);
 				}
-				rtp->stun = 1;
-				mutex_unlock(&rtp->up->up->lock);
-
-				mutex_lock(&rtcp->up->up->lock);
-				if (rtp->up != rtcp->up && !rtcp->up->ice_ufrag.s) {
-					/* safe to read */
-					rtcp->up->ice_ufrag = rtp->up->ice_ufrag;
-					rtcp->up->ice_pwd = rtp->up->ice_pwd;
-				}
-				rtcp->stun = 1;
-				mutex_unlock(&rtcp->up->up->lock);
+				ps->stun = 1;
+				if (ps_rtcp)
+					ps_rtcp->stun = 1;
+				//mutex_unlock(&rtp->up->up->lock);
 
 				chopper_append_c(chop, "a=ice-ufrag:");
-				chopper_append_str(chop, &rtp->up->ice_ufrag);
+				chopper_append_str(chop, &call_media->ice_ufrag);
 				chopper_append_c(chop, "\r\na=ice-pwd:");
-				chopper_append_str(chop, &rtp->up->ice_pwd);
+				chopper_append_str(chop, &call_media->ice_pwd);
 				chopper_append_c(chop, "\r\n");
 			}
 
 			if (!flags->ice_remove) {
-				priority = new_priority(flags->ice_force ? NULL : media);
+				priority = new_priority(flags->ice_force ? NULL : sdp_media);
 
-				insert_candidates(chop, rtp, (r_flags == 2) ? NULL : rtcp,
-						priority, media);
+				insert_candidates(chop, ps, ps_rtcp,
+						priority, sdp_media);
 
-				if (callmaster_has_ipv6(rtp->up->up->call->callmaster)) {
+				if (callmaster_has_ipv6(call->callmaster)) {
 					priority -= 256;
-					insert_candidates_alt(chop, rtp, (r_flags == 2) ? NULL : rtcp,
-							priority, media);
+					insert_candidates_alt(chop, ps, ps_rtcp,
+							priority, sdp_media);
 				}
 			}
 

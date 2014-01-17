@@ -294,8 +294,8 @@ struct call *call_get_or_create(const str *callid, struct callmaster *m);
 struct callstream *callstream_new(struct call *ca, int num);
 //void callstream_init(struct callstream *s, struct relays_cache *);
 void kernelize(struct packet_stream *);
-//int call_stream_address(char *o, struct peer *p, enum stream_address_format format, int *len);
-//int call_stream_address_alt(char *o, struct peer *p, enum stream_address_format format, int *len);
+int call_stream_address_alt(char *, struct packet_stream *, enum stream_address_format, int *);
+int call_stream_address(char *, struct packet_stream *, enum stream_address_format, int *);
 
 //void relays_cache_init(struct relays_cache *c);
 //int relays_cache_want_ports(struct relays_cache *c, int portA, int portB, struct call *call);
