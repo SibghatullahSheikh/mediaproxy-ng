@@ -214,22 +214,28 @@ static const struct streamhandler __sh_savpf2savp = {
 /* ********** */
 
 static const struct streamhandler *__sh_matrix_in_rtp_avp[__PROTO_LAST] = {
+	[PROTO_RTP_AVP]		= &__sh_noop,
+	[PROTO_RTP_AVPF]	= &__sh_noop,
 	[PROTO_RTP_SAVP]	= &__sh_savp2avp,
 	[PROTO_RTP_SAVPF]	= &__sh_savp2avp,
 };
 static const struct streamhandler *__sh_matrix_in_rtp_avpf[__PROTO_LAST] = {
 	[PROTO_RTP_AVP]		= &__sh_avpf2avp,
+	[PROTO_RTP_AVPF]	= &__sh_noop,
 	[PROTO_RTP_SAVP]	= &__sh_avpf2savp,
 	[PROTO_RTP_SAVPF]	= &__sh_avp2savp,
 };
 static const struct streamhandler *__sh_matrix_in_rtp_savp[__PROTO_LAST] = {
 	[PROTO_RTP_AVP]		= &__sh_avp2savp,
 	[PROTO_RTP_AVPF]	= &__sh_avp2savp,
+	[PROTO_RTP_SAVP]	= &__sh_noop,
+	[PROTO_RTP_SAVPF]	= &__sh_noop,
 };
 static const struct streamhandler *__sh_matrix_in_rtp_savpf[__PROTO_LAST] = {
 	[PROTO_RTP_AVP]		= &__sh_savpf2avp,
 	[PROTO_RTP_AVPF]	= &__sh_savp2avp,
 	[PROTO_RTP_SAVP]	= &__sh_savpf2avp,
+	[PROTO_RTP_SAVPF]	= &__sh_noop,
 };
 
 /* ********** */
@@ -437,8 +443,6 @@ static void determine_handler(struct packet_stream *in, struct packet_stream *ou
 	if (in->has_handler && out->has_handler)
 		return;
 
-	if (in->media->protocol == out->media->protocol)
-		goto dummy;
 	if (in->media->protocol == PROTO_UNKNOWN)
 		goto err;
 	if (out->media->protocol == PROTO_UNKNOWN)
@@ -468,7 +472,6 @@ done:
 
 err:
 	mylog(LOG_WARNING, "Unknown transport protocol encountered");
-dummy:
 	in->handler = &__sh_noop;
 	out->handler = &__sh_noop;
 	goto done;
