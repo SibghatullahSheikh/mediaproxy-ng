@@ -1966,6 +1966,12 @@ tag:
 	return ret;
 }
 
+static struct call_monologue *call_get_mono_dialogue(struct call *call, const str *fromtag, const str *totag) {
+	if (!totag || !totag->s) /* offer, not answer */
+		return call_get_monologue(call, fromtag);
+	return call_get_dialogue(call, fromtag, totag);
+}
+
 static int addr_parse_udp(struct stream_params *sp, char **out) {
 	u_int32_t ip4;
 	const char *cp;
@@ -2012,16 +2018,18 @@ fail:
 	return -1;
 }
 
-static str *call_update_lookup_udp(char **out, struct callmaster *m, enum call_opmode opmode, int tagidx) {
+static str *call_update_lookup_udp(char **out, struct callmaster *m, enum call_opmode opmode) {
 	struct call *c;
 	struct call_monologue *monologue;
 	GQueue q = G_QUEUE_INIT;
 	struct stream_params sp;
-	str *ret, callid, viabranch, tag;
+	str *ret, callid, viabranch, fromtag, totag = STR_NULL;
 
 	str_init(&callid, out[RE_UDP_UL_CALLID]);
 	str_init(&viabranch, out[RE_UDP_UL_VIABRANCH]);
-	str_init(&tag, out[tagidx]);
+	str_init(&fromtag, out[RE_UDP_UL_FROMTAG]);
+	if (opmode == OP_ANSWER)
+		str_init(&totag, out[RE_UDP_UL_TOTAG]);
 
 	c = call_get_opmode(&callid, m, opmode);
 	if (!c) {
@@ -2030,7 +2038,7 @@ static str *call_update_lookup_udp(char **out, struct callmaster *m, enum call_o
 		return str_sprintf("%s 0 " IPF "\n", out[RE_UDP_COOKIE], IPP(m->conf.ipv4));
 	}
 	//log_info = &viabranch;
-	monologue = call_get_monologue(c, &tag);
+	monologue = call_get_mono_dialogue(c, &fromtag, &totag);
 
 	if (addr_parse_udp(&sp, out))
 		goto fail;
@@ -2059,17 +2067,17 @@ out:
 }
 
 str *call_update_udp(char **out, struct callmaster *m) {
-	return call_update_lookup_udp(out, m, OP_OFFER, RE_UDP_UL_FROMTAG);
+	return call_update_lookup_udp(out, m, OP_OFFER);
 }
 str *call_lookup_udp(char **out, struct callmaster *m) {
-	return call_update_lookup_udp(out, m, OP_ANSWER, RE_UDP_UL_TOTAG);
+	return call_update_lookup_udp(out, m, OP_ANSWER);
 }
 
-static str *call_request_lookup_tcp(char **out, struct callmaster *m, enum call_opmode opmode, const char *tagstr) {
+static str *call_request_lookup_tcp(char **out, struct callmaster *m, enum call_opmode opmode) {
 	struct call *c;
 	struct call_monologue *monologue;
 	GQueue s = G_QUEUE_INIT;
-	str *ret = NULL, callid, tag;
+	str *ret = NULL, callid, fromtag, totag = STR_NULL;
 	GHashTable *infohash;
 
 	str_init(&callid, out[RE_TCP_RL_CALLID]);
@@ -2082,20 +2090,32 @@ static str *call_request_lookup_tcp(char **out, struct callmaster *m, enum call_
 
 	info_parse(out[RE_TCP_RL_INFO], infohash, m);
 	streams_parse(out[RE_TCP_RL_STREAMS], m, &s);
-	str_init(&tag, g_hash_table_lookup(infohash, tagstr));
+	str_init(&fromtag, g_hash_table_lookup(infohash, "fromtag"));
+	if (!fromtag.s) {
+		mylog(LOG_WARNING, LOG_PREFIX_C "No from-tag in message", LOG_PARAMS_C(c));
+		goto out2;
+	}
+	if (opmode == OP_ANSWER) {
+		str_init(&totag, g_hash_table_lookup(infohash, "totag"));
+		if (!totag.s) {
+			mylog(LOG_WARNING, LOG_PREFIX_C "No to-tag in message", LOG_PARAMS_C(c));
+			goto out2;
+		}
+	}
 
-	monologue = call_get_monologue(c, &tag);
+	monologue = call_get_mono_dialogue(c, &fromtag, &totag);
 	/* XXX return value */
 	monologue_offer_answer(monologue, &s);
 
 	ret = streams_print(&monologue->medias, 1, s.length, NULL, SAF_TCP);
 	mutex_unlock(&c->master_lock);
 
+out2:
 	streams_free(&s);
 
 	redis_update(c, m->conf.redis);
 
-	mylog(LOG_INFO, LOG_PREFIX_CI "Returning to SIP proxy: "STR_FORMAT"", LOG_PARAMS_CI(c), STR_FMT(ret));
+	mylog(LOG_INFO, LOG_PREFIX_C "Returning to SIP proxy: "STR_FORMAT"", LOG_PARAMS_C(c), STR_FMT0(ret));
 	obj_put(c);
 
 out:
@@ -2104,10 +2124,10 @@ out:
 }
 
 str *call_request_tcp(char **out, struct callmaster *m) {
-	return call_request_lookup_tcp(out, m, OP_OFFER, "fromtag");
+	return call_request_lookup_tcp(out, m, OP_OFFER);
 }
 str *call_lookup_tcp(char **out, struct callmaster *m) {
-	return call_request_lookup_tcp(out, m, OP_ANSWER, "totag");
+	return call_request_lookup_tcp(out, m, OP_ANSWER);
 }
 
 static int call_delete_branch(struct callmaster *m, const str *callid, const str *branch,
@@ -2467,8 +2487,10 @@ static void call_ng_process_flags(struct sdp_ng_flags *out, bencode_item_t *inpu
 	bencode_dictionary_get_str(input, "media address", &out->media_address);
 }
 
-static const char *call_offer_answer_ng(bencode_item_t *input, struct callmaster *m, bencode_item_t *output, enum call_opmode opmode, const char *tagname) {
-	str sdp, fromtag, totag, callid;
+static const char *call_offer_answer_ng(bencode_item_t *input, struct callmaster *m,
+		bencode_item_t *output, enum call_opmode opmode)
+{
+	str sdp, fromtag, totag = STR_NULL, callid;
 	char *errstr;
 	GQueue parsed = G_QUEUE_INIT;
 	GQueue streams = G_QUEUE_INIT;
@@ -2482,8 +2504,12 @@ static const char *call_offer_answer_ng(bencode_item_t *input, struct callmaster
 		return "No SDP body in message";
 	if (!bencode_dictionary_get_str(input, "call-id", &callid))
 		return "No call-id in message";
-	if (!bencode_dictionary_get_str(input, tagname, &fromtag))
-		return "No from/to-tag in message";
+	if (!bencode_dictionary_get_str(input, "from-tag", &fromtag))
+		return "No from-tag in message";
+	if (opmode == OP_ANSWER) {
+		if (!bencode_dictionary_get_str(input, "to-tag", &totag))
+			return "No to-tag in message";
+	}
 	//bencode_dictionary_get_str(input, "via-branch", &viabranch);
 	//log_info = &viabranch;
 
@@ -2502,14 +2528,7 @@ static const char *call_offer_answer_ng(bencode_item_t *input, struct callmaster
 		goto out;
 	//log_info = &viabranch;
 
-	if (opmode == OP_OFFER)
-		monologue = call_get_monologue(call, &fromtag);
-	else { /* answer */
-		totag = fromtag;
-		if (!bencode_dictionary_get_str(input, "from-tag", &fromtag))
-			return "No from-tag in message";
-		monologue = call_get_dialogue(call, &fromtag, &totag);
-	}
+	monologue = call_get_mono_dialogue(call, &fromtag, &totag);
 
 	chopper = sdp_chopper_new(&sdp);
 	bencode_buffer_destroy_add(output->buffer, (free_func_t) sdp_chopper_destroy, chopper);
@@ -2539,11 +2558,11 @@ out:
 }
 
 const char *call_offer_ng(bencode_item_t *input, struct callmaster *m, bencode_item_t *output) {
-	return call_offer_answer_ng(input, m, output, OP_OFFER, "from-tag");
+	return call_offer_answer_ng(input, m, output, OP_OFFER);
 }
 
 const char *call_answer_ng(bencode_item_t *input, struct callmaster *m, bencode_item_t *output) {
-	return call_offer_answer_ng(input, m, output, OP_ANSWER, "to-tag");
+	return call_offer_answer_ng(input, m, output, OP_ANSWER);
 }
 
 const char *call_delete_ng(bencode_item_t *input, struct callmaster *m, bencode_item_t *output) {
