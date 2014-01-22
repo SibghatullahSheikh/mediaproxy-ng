@@ -103,6 +103,7 @@ struct streamhandler {
 	const struct streamhandler_io	*out;
 };
 
+#if 0
 static char *rtp_codecs[] = {
 	[0]	= "G711u",
 	[1]	= "1016",
@@ -127,6 +128,7 @@ static char *rtp_codecs[] = {
 	[33]	= "MP2T",
 	[34]	= "H263",
 };
+#endif
 const char *transport_protocol_strings[__PROTO_LAST] = {
 	[PROTO_RTP_AVP]		= "RTP/AVP",
 	[PROTO_RTP_SAVP]	= "RTP/SAVP",
@@ -148,9 +150,9 @@ static int call_savp2avp_rtp(str *s, struct packet_stream *);
 static int call_avp2savp_rtcp(str *s, struct packet_stream *);
 static int call_savp2avp_rtcp(str *s, struct packet_stream *);
 static int call_avpf2avp_rtcp(str *s, struct packet_stream *);
-static int call_avpf2savp_rtcp(str *s, struct packet_stream *);
+//static int call_avpf2savp_rtcp(str *s, struct packet_stream *);
 static int call_savpf2avp_rtcp(str *s, struct packet_stream *);
-static int call_savpf2savp_rtcp(str *s, struct packet_stream *);
+//static int call_savpf2savp_rtcp(str *s, struct packet_stream *);
 
 
 /* ********** */
@@ -2067,7 +2069,6 @@ static str *call_request_lookup_tcp(char **out, struct callmaster *m, enum call_
 	struct call *c;
 	struct call_monologue *monologue;
 	GQueue s = G_QUEUE_INIT;
-	int num;
 	str *ret = NULL, callid, tag;
 	GHashTable *infohash;
 
@@ -2114,7 +2115,6 @@ static int call_delete_branch(struct callmaster *m, const str *callid, const str
 {
 	struct call *c;
 	struct call_monologue *ml;
-	GList *l;
 	int ret;
 	const str *match_tag;
 
@@ -2310,16 +2310,16 @@ void call_delete_tcp(char **out, struct callmaster *m) {
 
 
 static void call_status_iterator(struct call *c, struct control_stream *s) {
-	GList *l;
-	struct callstream *cs;
-	struct peer *p;
-	struct streamrelay *r1, *r2;
-	struct streamrelay *rx1, *rx2;
-	struct callmaster *m;
-	char addr1[64], addr2[64], addr3[64];
+//	GList *l;
+//	struct callstream *cs;
+//	struct peer *p;
+//	struct streamrelay *r1, *r2;
+//	struct streamrelay *rx1, *rx2;
+//	struct callmaster *m;
+//	char addr1[64], addr2[64], addr3[64];
 
-	m = c->callmaster;
-	mutex_lock(&c->master_lock);
+//	m = c->callmaster;
+//	mutex_lock(&c->master_lock);
 
 	control_stream_printf(s, "session %.*s - - - - %i\n",
 		STR_FMT(&c->callid),
@@ -2327,7 +2327,7 @@ static void call_status_iterator(struct call *c, struct control_stream *s) {
 
 	/* XXX restore function */
 
-	mutex_unlock(&c->master_lock);
+//	mutex_unlock(&c->master_lock);
 }
 
 static void callmaster_get_all_calls_interator(void *key, void *val, void *ptr) {
@@ -2590,6 +2590,7 @@ static bencode_item_t *peer_address(bencode_buffer_t *b, struct stream *s) {
 }
 #endif
 
+#if 0
 static bencode_item_t *stats_encode(bencode_buffer_t *b, struct stats *s) {
 	bencode_item_t *d;
 
@@ -2599,7 +2600,9 @@ static bencode_item_t *stats_encode(bencode_buffer_t *b, struct stats *s) {
 	bencode_dictionary_add_integer(d, "errors", s->errors);
 	return d;
 }
+#endif
 
+#if 0
 static bencode_item_t *streamrelay_stats(bencode_buffer_t *b, struct packet_stream *ps) {
 	bencode_item_t *d;
 
@@ -2614,7 +2617,9 @@ static bencode_item_t *streamrelay_stats(bencode_buffer_t *b, struct packet_stre
 
 	return d;
 }
+#endif
 
+#if 0
 static bencode_item_t *rtp_rtcp_stats(bencode_buffer_t *b, struct stats *rtp, struct stats *rtcp) {
 	bencode_item_t *s;
 	s = bencode_dictionary(b);
@@ -2622,6 +2627,7 @@ static bencode_item_t *rtp_rtcp_stats(bencode_buffer_t *b, struct stats *rtp, st
 	bencode_dictionary_add(s, "rtcp", stats_encode(b, rtcp));
 	return s;
 }
+#endif
 
 #if 0
 XXX
@@ -2660,17 +2666,17 @@ static void ng_stats_cb(struct peer *p, struct peer *px, void *streams) {
 
 /* call must be locked */
 static void ng_call_stats(struct call *call, const str *fromtag, const str *totag, bencode_item_t *output) {
-	bencode_item_t *streams, *dict;
-	struct call_stats stats;
+	//bencode_item_t *streams, *dict;
+//	struct call_stats stats;
 
-	bencode_dictionary_add_integer(output, "created", call->created);
+//	bencode_dictionary_add_integer(output, "created", call->created);
 
-	streams = bencode_dictionary_add_list(output, "streams");
+	//streams = bencode_dictionary_add_list(output, "streams");
 	//stats_query(call, fromtag, totag, &stats, ng_stats_cb, streams); XXX
 
-	dict = bencode_dictionary_add_dictionary(output, "totals");
-	bencode_dictionary_add(dict, "input", rtp_rtcp_stats(output->buffer, &stats.totals[0], &stats.totals[1]));
-	bencode_dictionary_add(dict, "output", rtp_rtcp_stats(output->buffer, &stats.totals[2], &stats.totals[3]));
+//	dict = bencode_dictionary_add_dictionary(output, "totals");
+//	bencode_dictionary_add(dict, "input", rtp_rtcp_stats(output->buffer, &stats.totals[0], &stats.totals[1]));
+//	bencode_dictionary_add(dict, "output", rtp_rtcp_stats(output->buffer, &stats.totals[2], &stats.totals[3]));
 }
 
 const char *call_query_ng(bencode_item_t *input, struct callmaster *m, bencode_item_t *output) {
