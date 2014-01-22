@@ -2468,7 +2468,7 @@ static void call_ng_process_flags(struct sdp_ng_flags *out, bencode_item_t *inpu
 }
 
 static const char *call_offer_answer_ng(bencode_item_t *input, struct callmaster *m, bencode_item_t *output, enum call_opmode opmode, const char *tagname) {
-	str sdp, fromtag, callid;
+	str sdp, fromtag, totag, callid;
 	char *errstr;
 	GQueue parsed = G_QUEUE_INIT;
 	GQueue streams = G_QUEUE_INIT;
@@ -2483,7 +2483,7 @@ static const char *call_offer_answer_ng(bencode_item_t *input, struct callmaster
 	if (!bencode_dictionary_get_str(input, "call-id", &callid))
 		return "No call-id in message";
 	if (!bencode_dictionary_get_str(input, tagname, &fromtag))
-		return "No from-tag in message";
+		return "No from/to-tag in message";
 	//bencode_dictionary_get_str(input, "via-branch", &viabranch);
 	//log_info = &viabranch;
 
@@ -2501,7 +2501,15 @@ static const char *call_offer_answer_ng(bencode_item_t *input, struct callmaster
 	if (!call)
 		goto out;
 	//log_info = &viabranch;
-	monologue = call_get_monologue(call, &fromtag);
+
+	if (opmode == OP_OFFER)
+		monologue = call_get_monologue(call, &fromtag);
+	else { /* answer */
+		totag = fromtag;
+		if (!bencode_dictionary_get_str(input, "from-tag", &fromtag))
+			return "No from-tag in message";
+		monologue = call_get_dialogue(call, &fromtag, &totag);
+	}
 
 	chopper = sdp_chopper_new(&sdp);
 	bencode_buffer_destroy_add(output->buffer, (free_func_t) sdp_chopper_destroy, chopper);
