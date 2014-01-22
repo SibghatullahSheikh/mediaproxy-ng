@@ -1351,6 +1351,7 @@ static int __num_media_streams(struct call_media *media, unsigned int num_ports)
 		stream->call = obj_get(call);
 		stream->media = media;
 		stream->fd = fd_arr[i];
+		stream->last_packet = poller_now;
 		g_queue_push_tail(&media->streams, stream);
 		call->streams = g_list_prepend(call->streams, stream);
 
