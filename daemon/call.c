@@ -38,8 +38,8 @@
 #define DBG(x...) ((void)0)
 #endif
 
-#define LOG_PREFIX_C "[%.*s] "
-#define LOG_PREFIX_CI "[%.*s - %.*s] "
+#define LOG_PREFIX_C "["STR_FORMAT"] "
+#define LOG_PREFIX_CI "["STR_FORMAT" - "STR_FORMAT"] "
 #define LOG_PARAMS_C(c) STR_FMT(&(c)->callid)
 #define LOG_PARAMS_CI(c) STR_FMT(&(c)->callid), STR_FMT0(log_info)
 
@@ -914,7 +914,7 @@ void xmlrpc_kill_calls(void *p) {
 	while (xh->tags) {
 		tag = xh->tags->data;
 
-		mylog(LOG_INFO, "Forking child to close call with tag %.*s via XMLRPC", STR_FMT(tag));
+		mylog(LOG_INFO, "Forking child to close call with tag "STR_FORMAT" via XMLRPC", STR_FMT(tag));
 		pid = fork();
 
 		if (pid) {
@@ -945,7 +945,7 @@ retry:
 			close(i);
 
 		openlog("mediaproxy-ng/child", LOG_PID | LOG_NDELAY, LOG_DAEMON);
-		mylog(LOG_INFO, "Initiating XMLRPC call for tag %.*s", STR_FMT(tag));
+		mylog(LOG_INFO, "Initiating XMLRPC call for tag "STR_FORMAT"", STR_FMT(tag));
 
 		alarm(5);
 
@@ -2045,7 +2045,7 @@ static str *call_update_lookup_udp(char **out, struct callmaster *m, enum call_o
 
 	redis_update(c, m->conf.redis);
 
-	mylog(LOG_INFO, LOG_PREFIX_CI "Returning to SIP proxy: %.*s", LOG_PARAMS_CI(c), STR_FMT(ret));
+	mylog(LOG_INFO, LOG_PREFIX_CI "Returning to SIP proxy: "STR_FORMAT"", LOG_PARAMS_CI(c), STR_FMT(ret));
 	goto out;
 
 fail:
@@ -2095,7 +2095,7 @@ static str *call_request_lookup_tcp(char **out, struct callmaster *m, enum call_
 
 	redis_update(c, m->conf.redis);
 
-	mylog(LOG_INFO, LOG_PREFIX_CI "Returning to SIP proxy: %.*s", LOG_PARAMS_CI(c), STR_FMT(ret));
+	mylog(LOG_INFO, LOG_PREFIX_CI "Returning to SIP proxy: "STR_FORMAT"", LOG_PARAMS_CI(c), STR_FMT(ret));
 	obj_put(c);
 
 out:
@@ -2133,7 +2133,7 @@ static int call_delete_branch(struct callmaster *m, const str *callid, const str
 
 	ml = g_hash_table_lookup(c->tags, match_tag);
 	if (!ml) {
-		mylog(LOG_INFO, LOG_PREFIX_C "Tag '%.*s' in delete message not found, ignoring",
+		mylog(LOG_INFO, LOG_PREFIX_C "Tag '"STR_FORMAT"' in delete message not found, ignoring",
 				STR_FMT(match_tag), LOG_PARAMS_C(c));
 		goto err;
 	}
@@ -2321,7 +2321,7 @@ static void call_status_iterator(struct call *c, struct control_stream *s) {
 //	m = c->callmaster;
 //	mutex_lock(&c->master_lock);
 
-	control_stream_printf(s, "session %.*s - - - - %i\n",
+	control_stream_printf(s, "session "STR_FORMAT" - - - - %i\n",
 		STR_FMT(&c->callid),
 		(int) (poller_now - c->created));
 
