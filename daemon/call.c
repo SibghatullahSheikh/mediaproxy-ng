@@ -1846,6 +1846,7 @@ static struct call *call_get_opmode(const str *callid, struct callmaster *m, enu
 static struct call_monologue *__monologue_create(struct call *call) {
 	struct call_monologue *ret;
 
+	DBG("creating new monologue");
 	ret = g_slice_alloc0(sizeof(*ret));
 
 	ret->call = call;
@@ -1861,6 +1862,7 @@ static struct call_monologue *__monologue_create(struct call *call) {
 static void __monologue_tag(struct call_monologue *ml, const str *tag) {
 	struct call *call = ml->call;
 
+	DBG("tagging monologue with '"STR_FORMAT"'", STR_FMT(tag));
 	call_str_cpy(call, &ml->tag, tag);
 	g_hash_table_insert(call->tags, &ml->tag, ml);
 }
@@ -1900,8 +1902,11 @@ static void __monologue_destroy(struct call_monologue *monologue) {
 static struct call_monologue *call_get_monologue(struct call *call, const str *fromtag) {
 	struct call_monologue *ret;
 
+	DBG("getting monologue for tag '"STR_FORMAT"' in call '"STR_FORMAT"'",
+			STR_FMT(fromtag), STR_FMT(&call->callid));
 	ret = g_hash_table_lookup(call->tags, fromtag);
 	if (ret) {
+		DBG("found existing monologue");
 		__monologue_unkernelize(ret);
 		__monologue_unkernelize(ret->active_dialogue);
 		return ret;
@@ -1920,9 +1925,12 @@ static struct call_monologue *call_get_monologue(struct call *call, const str *f
 static struct call_monologue *call_get_dialogue(struct call *call, const str *fromtag, const str *totag) {
 	struct call_monologue *ft, *ret;
 
+	DBG("getting dialogue for tags '"STR_FORMAT"'<>'"STR_FORMAT"' in call '"STR_FORMAT"'",
+			STR_FMT(fromtag), STR_FMT(totag), STR_FMT(&call->callid));
 	/* if the to-tag is known already, return that */
 	ret = g_hash_table_lookup(call->tags, totag);
 	if (ret) {
+		DBG("found existing dialogue");
 		__monologue_unkernelize(ret);
 		__monologue_unkernelize(ret->active_dialogue);
 		return ret;
