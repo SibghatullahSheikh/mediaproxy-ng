@@ -1530,6 +1530,8 @@ int sdp_replace(struct sdp_chopper *chop, GQueue *sessions, struct call_monologu
 				goto error;
 			if (replace_consecutive_port_count(chop, sdp_media, ps, j))
 				goto error;
+			if (flags->transport_protocol != PROTO_UNKNOWN)
+				call_media->protocol = flags->transport_protocol;
 			if (replace_transport_protocol(chop, sdp_media, call_media))
 				goto error;
 

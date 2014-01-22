@@ -1411,12 +1411,13 @@ static int monologue_offer_answer(struct call_monologue *monologue, GQueue *stre
 		 * offer/answer. The OTHER side corresponds to what WILL BE sent to the
 		 * offerer or WAS sent to the answerer. */
 
-		if (sp->protocol == PROTO_UNKNOWN) {
-			if (media->protocol == PROTO_UNKNOWN)
-				media->protocol = PROTO_RTP_AVP;
+		if (other_media->protocol == PROTO_UNKNOWN) {
+			other_media->protocol = sp->protocol;
+			if (other_media->protocol == PROTO_UNKNOWN)
+				other_media->protocol = PROTO_RTP_AVP;
 		}
-		else
-			media->protocol = sp->protocol;
+		if (media->protocol == PROTO_UNKNOWN)
+			media->protocol = other_media->protocol;
 
 		other_media->rtcp_mux = sp->rtcp_mux;
 
