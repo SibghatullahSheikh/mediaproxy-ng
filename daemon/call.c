@@ -859,14 +859,14 @@ static void call_timer_iterator(void *key, void *val, void *ptr) {
 		mutex_lock(&ps->lock);
 
 		if (!ps->fd.localport)
-			continue;
+			goto next;
 		if (hlp->ports[ps->fd.localport])
 			abort();
 		hlp->ports[ps->fd.localport] = ps;
 		obj_hold(ps);
 
 		if (good)
-			continue;
+			goto next;
 
 		check = cm->conf.timeout;
 		/* XXX silenced stream timeout handling
@@ -879,6 +879,7 @@ static void call_timer_iterator(void *key, void *val, void *ptr) {
 		if (poller_now - ps->last_packet < check)
 			good = 1;
 
+next:
 		mutex_unlock(&ps->lock);
 	}
 
