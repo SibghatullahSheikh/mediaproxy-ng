@@ -805,13 +805,8 @@ static int fill_endpoint(struct endpoint *ep, const struct sdp_media *media, str
 		}
 		ep->ip46 = flags->parsed_received_from;
 	}
-	else if (address) {
-		if (is_addr_unspecified(&address->parsed)) {
-			if (parse_address(address))
-				return -1;
-		}
+	else if (address && !is_addr_unspecified(&address->parsed))
 		ep->ip46 = address->parsed;
-	}
 	else if (media->connection.parsed)
 		ep->ip46 = media->connection.address.parsed;
 	else if (session->connection.parsed)
