@@ -216,8 +216,8 @@ static const struct streamhandler __sh_savpf2savp = {
 static const struct streamhandler *__sh_matrix_in_rtp_avp[__PROTO_LAST] = {
 	[PROTO_RTP_AVP]		= &__sh_noop,
 	[PROTO_RTP_AVPF]	= &__sh_noop,
-	[PROTO_RTP_SAVP]	= &__sh_savp2avp,
-	[PROTO_RTP_SAVPF]	= &__sh_savp2avp,
+	[PROTO_RTP_SAVP]	= &__sh_avp2savp,
+	[PROTO_RTP_SAVPF]	= &__sh_avp2savp,
 };
 static const struct streamhandler *__sh_matrix_in_rtp_avpf[__PROTO_LAST] = {
 	[PROTO_RTP_AVP]		= &__sh_avpf2avp,
@@ -226,15 +226,15 @@ static const struct streamhandler *__sh_matrix_in_rtp_avpf[__PROTO_LAST] = {
 	[PROTO_RTP_SAVPF]	= &__sh_avp2savp,
 };
 static const struct streamhandler *__sh_matrix_in_rtp_savp[__PROTO_LAST] = {
-	[PROTO_RTP_AVP]		= &__sh_avp2savp,
-	[PROTO_RTP_AVPF]	= &__sh_avp2savp,
+	[PROTO_RTP_AVP]		= &__sh_savp2avp,
+	[PROTO_RTP_AVPF]	= &__sh_savp2avp,
 	[PROTO_RTP_SAVP]	= &__sh_noop,
 	[PROTO_RTP_SAVPF]	= &__sh_noop,
 };
 static const struct streamhandler *__sh_matrix_in_rtp_savpf[__PROTO_LAST] = {
 	[PROTO_RTP_AVP]		= &__sh_savpf2avp,
 	[PROTO_RTP_AVPF]	= &__sh_savp2avp,
-	[PROTO_RTP_SAVP]	= &__sh_savpf2avp,
+	[PROTO_RTP_SAVP]	= &__sh_savpf2savp,
 	[PROTO_RTP_SAVPF]	= &__sh_noop,
 };
 
@@ -540,11 +540,11 @@ static int stream_packet(struct packet_stream *stream, str *s, struct sockaddr_i
 
 	if (!rtcp) {
 		rwf_in = stream->handler->in->rtp;
-		rwf_out = sink->handler->out->rtp;
+		rwf_out = stream->handler->out->rtp;
 	}
 	else {
 		rwf_in = stream->handler->in->rtcp;
-		rwf_out = sink->handler->out->rtcp;
+		rwf_out = stream->handler->out->rtcp;
 	}
 
 	/* return values are: 0 = forward packet, -1 = error/dont forward,
@@ -1455,6 +1455,8 @@ static int monologue_offer_answer(struct call_monologue *monologue, GQueue *stre
 				other_stream->endpoint = sp->rtp_endpoint;
 				other_stream->advertised_endpoint = other_stream->endpoint;
 
+				other_stream->crypto.in = sp->crypto;
+
 				/* XXX polymorph this */
 				stream->has_handler = 0;
 				other_stream->has_handler = 0;
@@ -1484,6 +1486,8 @@ rtcp:
 
 				other_stream->endpoint = sp->rtcp_endpoint;
 				other_stream->advertised_endpoint = other_stream->endpoint;
+
+				other_stream->crypto.in = sp->crypto;
 			}
 			else {
 				other_stream = __get_stream(other_media, &other_iter);
@@ -1492,6 +1496,8 @@ rtcp:
 				other_stream->endpoint = sp->rtp_endpoint;
 				other_stream->endpoint.port++;
 				other_stream->advertised_endpoint = other_stream->endpoint;
+
+				other_stream->crypto.in = sp->crypto;
 			}
 
 			stream->rtcp_sink = other_stream;
