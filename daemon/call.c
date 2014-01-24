@@ -422,6 +422,9 @@ static int __k_null(struct mediaproxy_srtp *s, struct packet_stream *stream) {
 	return 0;
 }
 static int __k_srtp_crypt(struct mediaproxy_srtp *s, struct crypto_context *c) {
+	if (!c->crypto_suite)
+		return -1;
+
 	*s = (struct mediaproxy_srtp) {
 		.cipher		= c->crypto_suite->kernel_cipher,
 		.hmac		= c->crypto_suite->kernel_hmac,
@@ -471,6 +474,41 @@ err:
 	goto done;
 }
 
+void callmaster_msg_mh_src(struct callmaster *cm, struct msghdr *mh) {
+	struct cmsghdr *ch;
+	struct in_pktinfo *pi;
+	struct in6_pktinfo *pi6;
+	struct sockaddr_in6 *sin6;
+
+	sin6 = mh->msg_name;
+
+	ch = CMSG_FIRSTHDR(mh);
+	ZERO(*ch);
+
+	if (IN6_IS_ADDR_V4MAPPED(&sin6->sin6_addr)) {
+		ch->cmsg_len = CMSG_LEN(sizeof(*pi));
+		ch->cmsg_level = IPPROTO_IP;
+		ch->cmsg_type = IP_PKTINFO;
+
+		pi = (void *) CMSG_DATA(ch);
+		ZERO(*pi);
+		pi->ipi_spec_dst.s_addr = cm->conf.ipv4;
+
+		mh->msg_controllen = CMSG_SPACE(sizeof(*pi));
+	}
+	else {
+		ch->cmsg_len = CMSG_LEN(sizeof(*pi6));
+		ch->cmsg_level = IPPROTO_IPV6;
+		ch->cmsg_type = IPV6_PKTINFO;
+
+		pi6 = (void *) CMSG_DATA(ch);
+		ZERO(*pi6);
+		pi6->ipi6_addr = cm->conf.ipv6;
+
+		mh->msg_controllen = CMSG_SPACE(sizeof(*pi6));
+	}
+}
+
 /* called lock-free */
 static int stream_packet(struct packet_stream *stream, str *s, struct sockaddr_in6 *fsin) {
 	struct packet_stream *sink = NULL;
@@ -480,9 +518,6 @@ static int stream_packet(struct packet_stream *stream, str *s, struct sockaddr_i
 	struct msghdr mh;
 	struct iovec iov;
 	unsigned char buf[256];
-	struct cmsghdr *ch;
-	struct in_pktinfo *pi;
-	struct in6_pktinfo *pi6;
 	struct call *call;
 	struct callmaster *cm;
 	/*unsigned char cc;*/
@@ -615,9 +650,6 @@ forward:
 	mh.msg_control = buf;
 	mh.msg_controllen = sizeof(buf);
 
-	ch = CMSG_FIRSTHDR(&mh);
-	ZERO(*ch);
-
 	ZERO(sin6);
 	sin6.sin6_family = AF_INET6;
 	sin6.sin6_addr = sink->endpoint.ip46;
@@ -627,28 +659,7 @@ forward:
 
 	mutex_unlock(&sink->out_lock);
 
-	if (IN6_IS_ADDR_V4MAPPED(&sin6.sin6_addr)) {
-		ch->cmsg_len = CMSG_LEN(sizeof(*pi));
-		ch->cmsg_level = IPPROTO_IP;
-		ch->cmsg_type = IP_PKTINFO;
-
-		pi = (void *) CMSG_DATA(ch);
-		ZERO(*pi);
-		pi->ipi_spec_dst.s_addr = cm->conf.ipv4;
-
-		mh.msg_controllen = CMSG_SPACE(sizeof(*pi));
-	}
-	else {
-		ch->cmsg_len = CMSG_LEN(sizeof(*pi6));
-		ch->cmsg_level = IPPROTO_IPV6;
-		ch->cmsg_type = IPV6_PKTINFO;
-
-		pi6 = (void *) CMSG_DATA(ch);
-		ZERO(*pi6);
-		pi6->ipi6_addr = cm->conf.ipv6;
-
-		mh.msg_controllen = CMSG_SPACE(sizeof(*pi6));
-	}
+	callmaster_msg_mh_src(cm, &mh);
 
 	ZERO(iov);
 	iov.iov_base = s->s;
@@ -2594,6 +2605,8 @@ const char *call_answer_ng(bencode_item_t *input, struct callmaster *m, bencode_
 
 const char *call_delete_ng(bencode_item_t *input, struct callmaster *m, bencode_item_t *output) {
 	str fromtag, totag, viabranch, callid;
+	bencode_item_t *flags, *it;
+	int fatal = 0;
 
 	if (!bencode_dictionary_get_str(input, "call-id", &callid))
 		return "No call-id in message";
@@ -2602,8 +2615,19 @@ const char *call_delete_ng(bencode_item_t *input, struct callmaster *m, bencode_
 	bencode_dictionary_get_str(input, "to-tag", &totag);
 	bencode_dictionary_get_str(input, "via-branch", &viabranch);
 
-	if (call_delete_branch(m, &callid, &viabranch, &fromtag, &totag, output))
-		return "Call-ID not found or tags didn't match";
+	flags = bencode_dictionary_get_expect(input, "flags", BENCODE_LIST);
+	if (flags) {
+		for (it = flags->child; it; it = it->sibling) {
+			if (!bencode_strcmp(it, "fatal"))
+				fatal = 1;
+		}
+	}
+
+	if (call_delete_branch(m, &callid, &viabranch, &fromtag, &totag, output)) {
+		if (fatal)
+			return "Call-ID not found or tags didn't match";
+		bencode_dictionary_add_string(output, "warning", "Call-ID not found or tags didn't match");
+	}
 
 	bencode_dictionary_add_string(output, "result", "ok");
 	return NULL;

@@ -100,6 +100,8 @@ void *bencode_buffer_alloc(bencode_buffer_t *buf, unsigned int size) {
 	struct __bencode_buffer_piece *piece;
 	void *ret;
 
+	if (!buf)
+		return NULL;
 	if (buf->error)
 		return NULL;
 
