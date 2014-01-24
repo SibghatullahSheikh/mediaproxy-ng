@@ -78,23 +78,6 @@ struct stats {
 	u_int64_t			errors;
 };
 
-/*
-struct stream {
-	struct in6_addr		ip46;
-	u_int16_t		port;
-	int			num;
-	enum transport_protocol	protocol;
-};
-struct stream_input {
-	struct stream		stream;
-	enum stream_direction	direction[2];
-	int			consecutive_num;
-	struct crypto_context	crypto;
-	int			has_rtcp:1;
-	int			is_rtcp:1;
-	int			rtcp_mux:1;
-};
-*/
 struct udp_fd {
 	int			fd;
 	u_int16_t		localport;
@@ -117,52 +100,6 @@ struct stream_params {
 	int			implicit_rtcp:1;
 	int			rtcp_mux:1;
 };
-
-/*
-struct streamrelay {
-	struct udp_fd		fd;
-	struct stream		peer;
-	struct stream		peer_advertised;
-	unsigned char		idx;
-	struct peer		*up;
-	struct streamrelay	*other;
-	struct stats		stats;
-	struct stats		kstats;
-	time_t			last;
-	struct crypto_context_pair crypto;
-	int			stun:1;
-	int			rtcp:1;
-	int			rtcp_mux:1;
-	int			no_kernel_support:1;
-};
-struct relays_cache {
-	struct udp_fd		relays_A[16];
-	struct udp_fd		relays_B[16];
-	struct udp_fd		*array_ptrs[2];
-	int			relays_open;
-};
-struct peer {
-	struct streamrelay	rtps[2];
-	str			tag;
-	char			*codec;
-	unsigned char		idx;
-	struct callstream	*up;
-	struct peer		*other;
-	int			desired_family;
-	str			ice_ufrag;
-	str			ice_pwd;
-	int			kernelized:1;
-	int			filled:1;
-	int			confirmed:1;
-};
-struct callstream {
-	struct obj		obj;
-	mutex_t			lock;
-	struct peer		peers[2];
-	struct call		*call;
-	int			num;
-};
-*/
 
 struct packet_stream {
 	struct obj		obj;
@@ -301,14 +238,9 @@ void calls_dump_redis(struct callmaster *);
 
 struct call *call_get_or_create(const str *callid, struct callmaster *m);
 struct callstream *callstream_new(struct call *ca, int num);
-//void callstream_init(struct callstream *s, struct relays_cache *);
 void kernelize(struct packet_stream *);
 int call_stream_address_alt(char *, struct packet_stream *, enum stream_address_format, int *);
 int call_stream_address(char *, struct packet_stream *, enum stream_address_format, int *);
-
-//void relays_cache_init(struct relays_cache *c);
-//int relays_cache_want_ports(struct relays_cache *c, int portA, int portB, struct call *call);
-//void relays_cache_cleanup(struct relays_cache *c, struct callmaster *m);
 
 enum transport_protocol transport_protocol(const str *s);
 
