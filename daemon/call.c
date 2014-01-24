@@ -667,6 +667,8 @@ forward:
 		goto out;
 	}
 
+	sink = NULL;
+
 drop:
 	if (sink)
 		mutex_unlock(&sink->out_lock);
