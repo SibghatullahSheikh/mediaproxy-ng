@@ -1389,6 +1389,8 @@ static int monologue_offer_answer(struct call_monologue *monologue, GQueue *stre
 	struct call_monologue *other_ml = monologue->active_dialogue;
 	struct packet_stream *stream, *other_stream = NULL;
 
+	monologue->call->last_signal = poller_now;
+
 	/* we must have a complete dialogue, even though the to-tag (other_ml->tag)
 	 * may not be known yet */
 	if (!other_ml)
@@ -1569,7 +1571,7 @@ static void call_destroy(struct call *c) {
 	mylog(LOG_INFO, LOG_PREFIX_C "Final packet stats:", LOG_PARAMS_C(c));
 	while (c->streams) {
 		ps = c->streams->data;
-		c->streams = g_list_remove_link(c->streams, c->streams);
+		c->streams = g_list_delete_link(c->streams, c->streams);
 
 		/* XXX
 		mylog(LOG_INFO, LOG_PREFIX_C
@@ -1775,12 +1777,13 @@ static void __call_free(void *p) {
 
 	while (c->monologues) {
 		m = c->monologues->data;
-		c->monologues = g_list_remove_link(c->monologues, c->monologues);
+		c->monologues = g_list_delete_link(c->monologues, c->monologues);
 
 		g_hash_table_destroy(m->other_tags);
 
 		for (it = m->medias.head; it; it = it->next) {
 			md = it->data;
+			g_queue_clear(&md->streams);
 			g_slice_free1(sizeof(*md), md);
 		}
 		g_queue_clear(&m->medias);
@@ -1919,8 +1922,8 @@ static void __monologue_destroy(struct call_monologue *monologue) {
 
 	while (l) {
 		dialogue = l->data;
+		l = g_list_delete_link(l, l);
 		g_hash_table_remove(dialogue->other_tags, &monologue->tag);
-		l = l->next;
 	}
 }
 
