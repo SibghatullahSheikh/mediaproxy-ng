@@ -1090,9 +1090,7 @@ static int insert_ice_address(struct sdp_chopper *chop, struct packet_stream *ps
 	char buf[64];
 	int len;
 
-	// mutex_lock(&sr->up->up->lock); XXX locking
 	call_stream_address(buf, ps, SAF_ICE, &len);
-	//mutex_unlock(&sr->up->up->lock);
 	chopper_append_dup(chop, buf, len);
 	chopper_append_printf(chop, " %hu", ps->fd.localport);
 
@@ -1103,9 +1101,7 @@ static int insert_ice_address_alt(struct sdp_chopper *chop, struct packet_stream
 	char buf[64];
 	int len;
 
-	// mutex_lock(&sr->up->up->lock); XXX locking
 	call_stream_address_alt(buf, ps, SAF_ICE, &len);
-	//mutex_unlock(&sr->up->up->lock);
 	chopper_append_dup(chop, buf, len);
 	chopper_append_printf(chop, " %hu", ps->fd.localport);
 
@@ -1124,9 +1120,7 @@ static int replace_network_address(struct sdp_chopper *chop, struct network_addr
 	if (copy_up_to(chop, &address->address_type))
 		return -1;
 
-	// mutex_lock(&sr->lock); XXX locking
 	call_stream_address(buf, ps, SAF_NG, &len);
-	//mutex_unlock(&sr->lock);
 	chopper_append_dup(chop, buf, len);
 
 	if (skip_over(chop, &address->address))
@@ -1381,32 +1375,24 @@ static int generate_crypto(struct sdp_media *media, struct sdp_ng_flags *flags,
 			&& flags->transport_protocol != PROTO_RTP_SAVPF)
 		return 0;
 
-	// XXX locking here
 	if (attr_get_by_id(&media->attributes, ATTR_CRYPTO)) {
 		/* SRTP <> SRTP case, copy from other stream
 		 * and leave SDP untouched */
 		src = &rtp->rtp_sink->crypto.in;
 
-		// mutex_lock(&rtp->up->up->lock);
 		c = &rtp->crypto.out;
 		if (!c->crypto_suite)
 			*c = *src;
-		//mutex_unlock(&rtp->up->up->lock);
 
 		if (rtcp) {
-			//mutex_lock(&rtcp->up->up->lock);
 			c = &rtcp->crypto.out;
 			if (!c->crypto_suite)
 				*c = *src;
-			//mutex_unlock(&rtcp->up->up->lock);
 		}
 
 		return 0;
 	}
 
-	// mutex_lock(&rtp->up->up->lock);
-
-	/* write-once, read-only */
 	c = &rtp->crypto.out;
 	if (!c->crypto_suite) {
 		c->crypto_suite = rtp->crypto.in.crypto_suite;
@@ -1419,8 +1405,6 @@ static int generate_crypto(struct sdp_media *media, struct sdp_ng_flags *flags,
 		/* mki = mki_len = 0 */
 		c->tag = rtp->crypto.in.tag;
 	}
-
-	// mutex_unlock(&rtp->up->up->lock);
 
 	assert(sizeof(b64_buf) >= (((c->crypto_suite->master_key_len
 				+ c->crypto_suite->master_salt_len)) / 3 + 1) * 4 + 4);
@@ -1435,8 +1419,6 @@ static int generate_crypto(struct sdp_media *media, struct sdp_ng_flags *flags,
 	p += g_base64_encode_close(0, p, &state, &save);
 
 	if (rtcp) {
-		//mutex_lock(&rtcp->up->up->lock);
-
 		src = c;
 		c = &rtcp->crypto.out;
 
@@ -1446,8 +1428,6 @@ static int generate_crypto(struct sdp_media *media, struct sdp_ng_flags *flags,
 				c->crypto_suite->master_key_len);
 		memcpy(c->master_salt, src->master_salt,
 				c->crypto_suite->master_salt_len);
-
-		//mutex_unlock(&rtcp->up->up->lock);
 	}
 
 	chopper_append_c(chop, "a=crypto:");
@@ -1461,6 +1441,7 @@ static int generate_crypto(struct sdp_media *media, struct sdp_ng_flags *flags,
 }
 
 
+/* called with call->master_lock held in W */
 int sdp_replace(struct sdp_chopper *chop, GQueue *sessions, struct call_monologue *monologue,
 		struct sdp_ng_flags *flags)
 {
@@ -1473,7 +1454,6 @@ int sdp_replace(struct sdp_chopper *chop, GQueue *sessions, struct call_monologu
 	struct packet_stream *ps, *ps_rtcp;
 	struct call *call;
 
-	// XXX check locking
 	m = monologue->medias.head;
 	do_ice = (flags->ice_force || (!has_ice(sessions) && !flags->ice_remove)) ? 1 : 0;
 	call = monologue->call;
@@ -1568,8 +1548,6 @@ int sdp_replace(struct sdp_chopper *chop, GQueue *sessions, struct call_monologu
 			generate_crypto(sdp_media, flags, ps, ps_rtcp, chop);
 
 			if (do_ice) {
-				// XXX locking here
-				// mutex_lock(&rtp->up->up->lock);
 				if (!call_media->ice_ufrag.s) {
 					create_random_ice_string(call, &call_media->ice_ufrag, 8);
 					create_random_ice_string(call, &call_media->ice_pwd, 28);
@@ -1577,7 +1555,6 @@ int sdp_replace(struct sdp_chopper *chop, GQueue *sessions, struct call_monologu
 				ps->stun = 1;
 				if (ps_rtcp)
 					ps_rtcp->stun = 1;
-				//mutex_unlock(&rtp->up->up->lock);
 
 				chopper_append_c(chop, "a=ice-ufrag:");
 				chopper_append_str(chop, &call_media->ice_ufrag);

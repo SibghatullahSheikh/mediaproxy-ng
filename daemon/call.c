@@ -266,17 +266,15 @@ static void ng_call_stats(struct call *call, const str *fromtag, const str *tota
 
 
 
+/* called lock-free */
 static void stream_closed(int fd, void *p, uintptr_t u) {
 	struct packet_stream *stream = p;
 	struct call *c = NULL;
 	int i;
 	socklen_t j;
 
-	mutex_lock(&stream->lock);
 	assert(stream->fd.fd == fd);
-	if (stream->call)
-		c = obj_get(stream->call);
-	mutex_unlock(&stream->lock);
+	c = stream->call;
 	if (!c)
 		return;
 
@@ -285,18 +283,17 @@ static void stream_closed(int fd, void *p, uintptr_t u) {
 	mylog(LOG_WARNING, LOG_PREFIX_C "Read error on media socket: %i (%s) -- closing call", LOG_PARAMS_C(c), i, strerror(i));
 
 	call_destroy(c);
-	obj_put(c);
 }
 
 
 
 
-/* called with stream and stream->*_sink locked */
+/* called with in_lock held */
 void kernelize(struct packet_stream *stream) {
 	struct mediaproxy_target_info mpt;
 	struct call *call = stream->call;
 	struct callmaster *cm = call->callmaster;
-	struct packet_stream *sink;
+	struct packet_stream *sink = NULL;
 
 	if (stream->kernelized)
 		return;
@@ -326,6 +323,8 @@ void kernelize(struct packet_stream *stream) {
 			|| !stream->handler->out->kernel)
 		goto no_kernel;
 
+	mutex_lock(&sink->out_lock);
+
 	mpt.target_port = stream->fd.localport;
 	mpt.tos = cm->conf.tos;
 	mpt.src_addr.port = sink->fd.localport;
@@ -348,6 +347,8 @@ void kernelize(struct packet_stream *stream) {
 	stream->handler->in->kernel(&mpt.decrypt, stream);
 	stream->handler->out->kernel(&mpt.encrypt, sink);
 
+	mutex_unlock(&stream->out_lock);
+
 	if (!mpt.encrypt.cipher || !mpt.encrypt.hmac)
 		goto no_kernel;
 	if (!mpt.decrypt.cipher || !mpt.decrypt.hmac)
@@ -356,6 +357,9 @@ void kernelize(struct packet_stream *stream) {
 	ZERO(stream->kernel_stats);
 
 	kernel_add_stream(cm->conf.kernelfd, &mpt, 0);
+	stream->kernelized = 1;
+
+	return;
 	
 no_kernel:
 	stream->kernelized = 1;
@@ -437,10 +441,11 @@ static int __k_srtp_decrypt(struct mediaproxy_srtp *s, struct packet_stream *str
 	return __k_srtp_crypt(s, &stream->crypto.in);
 }
 
+/* must be called with call->master_lock held in R, and in->in_lock and out->out_lock held */
 static void determine_handler(struct packet_stream *in, struct packet_stream *out) {
 	const struct streamhandler **sh_pp, *sh;
 
-	if (in->has_handler && out->has_handler)
+	if (in->has_handler)
 		return;
 
 	if (in->media->protocol == PROTO_UNKNOWN)
@@ -456,32 +461,21 @@ static void determine_handler(struct packet_stream *in, struct packet_stream *ou
 		goto err;
 	in->handler = sh;
 
-	sh_pp = __sh_matrix[out->media->protocol];
-	if (!sh_pp)
-		goto err;
-	sh = sh_pp[in->media->protocol];
-	if (!sh)
-		goto err;
-	out->handler = sh;
-
 done:
 	in->has_handler = 1;
-	out->has_handler = 1;
-
 	return;
 
 err:
 	mylog(LOG_WARNING, "Unknown transport protocol encountered");
 	in->handler = &__sh_noop;
-	out->handler = &__sh_noop;
 	goto done;
 }
 
-/* called with stream and stream->*_sink locked */
+/* called lock-free */
 static int stream_packet(struct packet_stream *stream, str *s, struct sockaddr_in6 *fsin) {
 	struct packet_stream *sink = NULL;
 	struct call_media *media;
-	int ret, update = 0, stun_ret = 0, handler_ret = 0, muxed_rtcp = 0, rtcp = 0;
+	int ret = 0, update = 0, stun_ret = 0, handler_ret = 0, muxed_rtcp = 0, rtcp = 0;
 	struct sockaddr_in6 sin6;
 	struct msghdr mh;
 	struct iovec iov;
@@ -501,14 +495,15 @@ static int stream_packet(struct packet_stream *stream, str *s, struct sockaddr_i
 	cm = call->callmaster;
 	smart_ntop_port(addr, fsin, sizeof(addr));
 
-	if (!media || !call)
-		return 0;
+	rwlock_lock_r(&call->master_lock);
+	mutex_lock(&stream->in_lock);
+
 	/* XXX check send/receive flags */
 
 	if (stream->stun && is_stun(s)) {
 		stun_ret = stun(s, stream, fsin);
 		if (!stun_ret)
-			return 0;
+			goto done;
 		if (stun_ret == 1) /* use candidate */
 			goto use_cand;
 		else /* not an stun packet */
@@ -533,8 +528,10 @@ static int stream_packet(struct packet_stream *stream, str *s, struct sockaddr_i
 		mutex_lock(&cm->statspslock);
 		cm->statsps.errors++;
 		mutex_unlock(&cm->statspslock);
-		return 0;
+		goto done;
 	}
+
+	mutex_lock(&sink->out_lock);
 
 	determine_handler(stream, sink);
 
@@ -557,17 +554,18 @@ static int stream_packet(struct packet_stream *stream, str *s, struct sockaddr_i
 	if (handler_ret > 0)
 		update = 1;
 
+	mutex_unlock(&sink->out_lock);
+
 use_cand:
 	if (!stream->filled)
 		goto forward;
 
-	if (media->asynchronous)
+	if (media->asymmetric)
 		stream->confirmed = 1;
 
 	if (stream->confirmed)
 		goto kernel_check;
 
-	/* XXX locking? */
 	if (!call->last_signal || poller_now <= call->last_signal + 3)
 		goto peerinfo;
 
@@ -589,11 +587,13 @@ peerinfo:
 	}
 	*/
 
+	mutex_lock(&stream->out_lock);
 	endpoint = stream->endpoint;
 	stream->endpoint.ip46 = fsin->sin6_addr;
 	stream->endpoint.port = ntohs(fsin->sin6_port);
 	if (memcmp(&endpoint, &stream->endpoint, sizeof(endpoint)))
 		update = 1;
+	mutex_unlock(&stream->out_lock);
 
 kernel_check:
 	if (stream->no_kernel_support)
@@ -603,8 +603,11 @@ kernel_check:
 		kernelize(stream);
 
 forward:
-	if (is_addr_unspecified(&sink->advertised_endpoint.ip46)
-			|| !sink || !sink->advertised_endpoint.port
+	if (sink)
+		mutex_lock(&sink->out_lock);
+
+	if (!sink || is_addr_unspecified(&sink->advertised_endpoint.ip46)
+			|| !sink->advertised_endpoint.port
 			|| stun_ret || handler_ret < 0)
 		goto drop;
 
@@ -621,6 +624,8 @@ forward:
 	sin6.sin6_port = htons(sink->endpoint.port);
 	mh.msg_name = &sin6;
 	mh.msg_namelen = sizeof(sin6);
+
+	mutex_unlock(&sink->out_lock);
 
 	if (IN6_IS_ADDR_V4MAPPED(&sin6.sin6_addr)) {
 		ch->cmsg_len = CMSG_LEN(sizeof(*pi));
@@ -663,6 +668,8 @@ forward:
 	}
 
 drop:
+	if (sink)
+		mutex_unlock(&sink->out_lock);
 	ret = 0;
 	stream->stats.packets++;
 	stream->stats.bytes += s->len;
@@ -676,34 +683,11 @@ out:
 	if (ret == 0 && update)
 		ret = 1;
 
+done:
+	mutex_unlock(&stream->in_lock);
+	rwlock_unlock_r(&call->master_lock);
+
 	return ret;
-}
-
-
-
-
-/* lock this stream and all of its sinks */
-/* XXX more granular locking */
-static void stream_lock_all(struct packet_stream *stream) {
-retry:
-	mutex_lock(&stream->lock);
-	if (stream->rtp_sink && mutex_trylock(&stream->rtp_sink->lock)) {
-		mutex_unlock(&stream->lock);
-		goto retry;
-	}
-	if (stream->rtcp_sink && mutex_trylock(&stream->rtcp_sink->lock)) {
-		if (stream->rtp_sink)
-			mutex_unlock(&stream->rtp_sink->lock);
-		mutex_unlock(&stream->lock);
-		goto retry;
-	}
-}
-static void stream_unlock_all(struct packet_stream *stream) {
-	mutex_unlock(&stream->lock);
-	if (stream->rtp_sink)
-		mutex_unlock(&stream->rtp_sink->lock);
-	if (stream->rtcp_sink)
-		mutex_unlock(&stream->rtcp_sink->lock);
 }
 
 
@@ -722,8 +706,6 @@ static void stream_readable(int fd, void *p, uintptr_t u) {
 	struct call *ca;
 	str s;
 
-	stream_lock_all(stream);
-
 	if (stream->fd.fd != fd)
 		goto out;
 
@@ -737,7 +719,6 @@ static void stream_readable(int fd, void *p, uintptr_t u) {
 				continue;
 			if (errno == EAGAIN || errno == EWOULDBLOCK)
 				break;
-			stream_unlock_all(stream);
 			stream_closed(fd, stream, 0);
 			return;
 		}
@@ -758,7 +739,6 @@ static void stream_readable(int fd, void *p, uintptr_t u) {
 		ret = stream_packet(stream, &s, sinp);
 		if (ret == -1) {
 			mylog(LOG_WARNING, "Write error on RTP socket");
-			stream_unlock_all(stream);
 			call_destroy(stream->call);
 			return;
 		}
@@ -768,7 +748,6 @@ static void stream_readable(int fd, void *p, uintptr_t u) {
 
 out:
 	ca = stream->call ? obj_get(stream->call) : NULL;
-	stream_unlock_all(stream);
 
 	if (ca && update)
 		redis_update(ca, stream->call->callmaster->conf.redis);
@@ -852,7 +831,7 @@ static void call_timer_iterator(void *key, void *val, void *ptr) {
 	int good = 0;
 	struct packet_stream *ps;
 
-	mutex_lock(&c->master_lock);
+	rwlock_lock_r(&c->master_lock);
 
 	if (!c->streams)
 		goto drop;
@@ -861,7 +840,7 @@ static void call_timer_iterator(void *key, void *val, void *ptr) {
 
 	for (it = c->streams; it; it = it->next) {
 		ps = it->data;
-		mutex_lock(&ps->lock);
+		mutex_lock(&ps->in_lock);
 
 		if (!ps->fd.localport)
 			goto next;
@@ -885,7 +864,7 @@ static void call_timer_iterator(void *key, void *val, void *ptr) {
 			good = 1;
 
 next:
-		mutex_unlock(&ps->lock);
+		mutex_unlock(&ps->in_lock);
 	}
 
 	if (good)
@@ -895,12 +874,12 @@ next:
 		LOG_PARAMS_C(c));
 
 drop:
-	mutex_unlock(&c->master_lock);
+	rwlock_unlock_r(&c->master_lock);
 	hlp->del = g_slist_prepend(hlp->del, obj_get(c));
 	return;
 
 out:
-	mutex_unlock(&c->master_lock);
+	rwlock_unlock_r(&c->master_lock);
 }
 
 void xmlrpc_kill_calls(void *p) {
@@ -1007,7 +986,7 @@ void kill_calls_timer(GSList *list, struct callmaster *m) {
 		if (!url)
 			goto destroy;
 
-		mutex_lock(&ca->master_lock);
+		rwlock_lock_r(&ca->master_lock);
 
 		for (csl = ca->monologues; csl; csl = csl->next) {
 			cm = csl->data;
@@ -1017,6 +996,8 @@ void kill_calls_timer(GSList *list, struct callmaster *m) {
 next:
 			;
 		}
+
+		rwlock_unlock_r(&ca->master_lock);
 
 destroy:
 		call_destroy(ca);
@@ -1030,13 +1011,13 @@ destroy:
 
 
 #define DS(x) do {							\
-		mutex_lock(&ps->lock);					\
+		mutex_lock(&ps->in_lock);				\
 		if (ke->stats.x < ps->kernel_stats.x)			\
 			d = 0;						\
 		else							\
 			d = ke->stats.x - ps->kernel_stats.x;		\
 		ps->stats.x += d;					\
-		mutex_unlock(&ps->lock);				\
+		mutex_unlock(&ps->in_lock);				\
 		mutex_lock(&m->statspslock);				\
 		m->statsps.x += d;					\
 		mutex_unlock(&m->statspslock);				\
@@ -1073,9 +1054,13 @@ static void callmaster_timer(void *ptr) {
 		if (!ps)
 			goto next;
 
+		rwlock_lock_r(&ps->call->master_lock);
+
 		DS(packets);
 		DS(bytes);
 		DS(errors);
+
+		mutex_lock(&ps->in_lock);
 
 		if (ke->stats.packets != ps->kernel_stats.packets)
 			ps->last_packet = poller_now;
@@ -1090,6 +1075,10 @@ static void callmaster_timer(void *ptr) {
 		sink = ps->rtp_sink;
 		if (!sink)
 			sink = ps->rtcp_sink;
+
+		if (sink)
+			mutex_lock(&sink->out_lock);
+
 		if (sink && sink->crypto.out.crypto_suite
 				&& ke->target.encrypt.last_index - sink->crypto.out.last_index > 0x4000) {
 			sink->crypto.out.last_index = ke->target.encrypt.last_index;
@@ -1101,6 +1090,10 @@ static void callmaster_timer(void *ptr) {
 			update = 1;
 		}
 
+		if (sink)
+			mutex_unlock(&sink->out_lock);
+		mutex_unlock(&ps->in_lock);
+		rwlock_unlock_r(&ps->call->master_lock);
 
 		if (update)
 			redis_update(ps->call, m->conf.redis);
@@ -1302,6 +1295,7 @@ static struct call_media *__get_media(struct call_monologue *ml, GList **it, con
 	/* possible incremental update, hunt for correct media struct */
 	while (*it) {
 		med = (*it)->data;
+		/* XXX compare media type too? */
 		if (med->index == sp->index) {
 			DBG("found existing call_media for stream #%u", sp->index);
 			return med;
@@ -1353,7 +1347,8 @@ static int __num_media_streams(struct call_media *media, unsigned int num_ports)
 	for (i = 0; i < num_ports; i++) {
 		DBG("allocating new packet_stream for port #%u in stream #%u", i, media->index);
 		stream = obj_alloc0("packet_stream", sizeof(*stream), stream_free);
-		mutex_init(&stream->lock);
+		mutex_init(&stream->in_lock);
+		mutex_init(&stream->out_lock);
 		stream->call = obj_get(call);
 		stream->media = media;
 		stream->fd = fd_arr[i];
@@ -1385,8 +1380,7 @@ static struct packet_stream *__get_stream(struct call_media *media, GList **iter
 	return s;
 }
 
-/* called with call->master_lock held */
-/* XXX stream locking */
+/* called with call->master_lock held in W */
 static int monologue_offer_answer(struct call_monologue *monologue, GQueue *streams) {
 	struct stream_params *sp;
 	GList *media_iter, *ml_media, *other_ml_media, *iter, *other_iter;
@@ -1521,6 +1515,7 @@ error:
 	return -1;
 }
 
+/* must be called with in_lock held or call->master_lock held in W */
 static void unkernelize(struct packet_stream *p) {
 	if (!p->kernelized)
 		return;
@@ -1533,7 +1528,7 @@ static void unkernelize(struct packet_stream *p) {
 }
 
 
-/* called with ps->lock held */
+/* called with call->master_lock held in W */
 static void kill_packet_stream(struct packet_stream *ps) {
 	struct poller *p = ps->call->callmaster->poller;
 
@@ -1543,8 +1538,12 @@ static void kill_packet_stream(struct packet_stream *ps) {
 
 	crypto_cleanup(&ps->crypto.in);
 	crypto_cleanup(&ps->crypto.out);
+
+	ps->rtp_sink = NULL;
+	ps->rtcp_sink = NULL;
 }
 
+/* called lock-free */
 static void call_destroy(struct call *c) {
 	struct callmaster *m;
 	struct packet_stream *ps;
@@ -1565,16 +1564,13 @@ static void call_destroy(struct call *c) {
 
 	redis_delete(c, m->conf.redis);
 
-	mutex_lock(&c->master_lock);
+	rwlock_lock_w(&c->master_lock);
 	/* at this point, no more packet streams can be added */
-	/* XXX is this really true? */
 	mylog(LOG_INFO, LOG_PREFIX_C "Final packet stats:", LOG_PARAMS_C(c));
 	while (c->streams) {
 		ps = c->streams->data;
 		c->streams = g_list_remove_link(c->streams, c->streams);
-		mutex_unlock(&c->master_lock);
 
-		mutex_lock(&ps->lock);
 		/* XXX
 		mylog(LOG_INFO, LOG_PREFIX_C
 			"--- "
@@ -1594,13 +1590,10 @@ static void call_destroy(struct call *c) {
 			s->peers[1].rtps[1].fd.localport, s->peers[1].rtps[1].stats.packets,
 			s->peers[1].rtps[1].stats.bytes, s->peers[1].rtps[1].stats.errors);
 		*/
-		/* XXX refcount, not the correct cleanup sequence! */
 		kill_packet_stream(ps);
-		mutex_unlock(&ps->lock);
 		obj_put(ps);
-		mutex_lock(&c->master_lock);
 	}
-	mutex_unlock(&c->master_lock);
+	rwlock_unlock_w(&c->master_lock);
 }
 
 
@@ -1770,16 +1763,34 @@ out:
 	return g_string_free_str(o);
 }
 
-static void call_free(void *p) {
+static void __call_free(void *p) {
 	struct call *c = p;
+	struct call_monologue *m;
+	struct call_media *md;
+	GList *it;
 
-	/* XXX */
-	//g_hash_table_destroy(c->branches);
-	g_hash_table_destroy(c->tags);
-	//g_queue_free(c->callstreams);
-	mutex_destroy(&c->buffer_lock);
-	mutex_destroy(&c->master_lock);
 	call_buffer_free(&c->buffer);
+	mutex_destroy(&c->buffer_lock);
+	rwlock_destroy(&c->master_lock);
+
+	while (c->monologues) {
+		m = c->monologues->data;
+		c->monologues = g_list_remove_link(c->monologues, c->monologues);
+
+		g_hash_table_destroy(m->other_tags);
+
+		for (it = m->medias.head; it; it = it->next) {
+			md = it->data;
+			g_slice_free1(sizeof(*md), md);
+		}
+		g_queue_clear(&m->medias);
+
+		g_slice_free1(sizeof(*m), m);
+	}
+
+	g_hash_table_destroy(c->tags);
+	//g_hash_table_destroy(c->branches);
+	assert(c->streams == NULL);
 }
 
 static struct call *call_create(const str *callid, struct callmaster *m) {
@@ -1787,18 +1798,18 @@ static struct call *call_create(const str *callid, struct callmaster *m) {
 
 	mylog(LOG_NOTICE, LOG_PREFIX_C "Creating new call",
 		STR_FMT(callid));	/* XXX will spam syslog on recovery from DB */
-	c = obj_alloc0("call", sizeof(*c), call_free);
+	c = obj_alloc0("call", sizeof(*c), __call_free);
 	c->callmaster = m;
 	mutex_init(&c->buffer_lock);
 	call_buffer_init(&c->buffer);
-	mutex_init(&c->master_lock);
+	rwlock_init(&c->master_lock);
 	c->tags = g_hash_table_new(str_hash, str_equal);
 	call_str_cpy(c, &c->callid, callid);
 	c->created = poller_now;
 	return c;
 }
 
-/* returns call with lock held */
+/* returns call with master_lock held in W */
 struct call *call_get_or_create(const str *callid, struct callmaster *m) {
 	struct call *c;
 
@@ -1817,19 +1828,19 @@ restart:
 			goto restart;
 		}
 		g_hash_table_insert(m->callhash, &c->callid, obj_get(c));
-		mutex_lock(&c->master_lock);
+		rwlock_lock_w(&c->master_lock);
 		rwlock_unlock_w(&m->hashlock);
 	}
 	else {
 		obj_hold(c);
-		mutex_lock(&c->master_lock);
+		rwlock_lock_w(&c->master_lock);
 		rwlock_unlock_r(&m->hashlock);
 	}
 
 	return c;
 }
 
-/* returns call with lock held, or NULL if not found */
+/* returns call with master_lock held in W, or NULL if not found */
 static struct call *call_get(const str *callid, struct callmaster *m) {
 	struct call *ret;
 
@@ -1840,21 +1851,21 @@ static struct call *call_get(const str *callid, struct callmaster *m) {
 		return NULL;
 	}
 
-	mutex_lock(&ret->master_lock);
+	rwlock_lock_w(&ret->master_lock);
 	obj_hold(ret);
 	rwlock_unlock_r(&m->hashlock);
 
 	return ret;
 }
 
-/* returns call with lock held, or possibly NULL iff opmode == OP_ANSWER */
+/* returns call with master_lock held in W, or possibly NULL iff opmode == OP_ANSWER */
 static struct call *call_get_opmode(const str *callid, struct callmaster *m, enum call_opmode opmode) {
 	if (opmode == OP_OFFER)
 		return call_get_or_create(callid, m);
 	return call_get(callid, m);
 }
 
-/* must be called with call->master_lock held */
+/* must be called with call->master_lock held in W */
 static struct call_monologue *__monologue_create(struct call *call) {
 	struct call_monologue *ret;
 
@@ -1871,6 +1882,7 @@ static struct call_monologue *__monologue_create(struct call *call) {
 	return ret;
 }
 
+/* must be called with call->master_lock held in W */
 static void __monologue_tag(struct call_monologue *ml, const str *tag) {
 	struct call *call = ml->call;
 
@@ -1879,6 +1891,7 @@ static void __monologue_tag(struct call_monologue *ml, const str *tag) {
 	g_hash_table_insert(call->tags, &ml->tag, ml);
 }
 
+/* must be called with call->master_lock held in W */
 static void __monologue_unkernelize(struct call_monologue *monologue) {
 	GList *l, *m;
 	struct call_media *media;
@@ -1897,6 +1910,7 @@ static void __monologue_unkernelize(struct call_monologue *monologue) {
 	}
 }
 
+/* must be called with call->master_lock held in W */
 static void __monologue_destroy(struct call_monologue *monologue) {
 	struct call_monologue *dialogue;
 	GList *l;
@@ -1910,7 +1924,7 @@ static void __monologue_destroy(struct call_monologue *monologue) {
 	}
 }
 
-/* must be called with call->master_lock held */
+/* must be called with call->master_lock held in W */
 static struct call_monologue *call_get_monologue(struct call *call, const str *fromtag) {
 	struct call_monologue *ret;
 
@@ -1933,7 +1947,7 @@ static struct call_monologue *call_get_monologue(struct call *call, const str *f
 	return ret;
 }
 
-/* must be called with call->master_lock held */
+/* must be called with call->master_lock held in W */
 static struct call_monologue *call_get_dialogue(struct call *call, const str *fromtag, const str *totag) {
 	struct call_monologue *ft, *ret;
 
@@ -2059,7 +2073,7 @@ static str *call_update_lookup_udp(char **out, struct callmaster *m, enum call_o
 	g_queue_clear(&q);
 
 	ret = streams_print(&monologue->medias, sp.index, sp.index, out[RE_UDP_COOKIE], SAF_UDP);
-	mutex_unlock(&c->master_lock);
+	rwlock_unlock_w(&c->master_lock);
 
 	redis_update(c, m->conf.redis);
 
@@ -2067,7 +2081,7 @@ static str *call_update_lookup_udp(char **out, struct callmaster *m, enum call_o
 	goto out;
 
 fail:
-	mutex_unlock(&c->master_lock);
+	rwlock_unlock_w(&c->master_lock);
 	mylog(LOG_WARNING, "Failed to parse a media stream: %s/%s:%s", out[RE_UDP_UL_ADDR4], out[RE_UDP_UL_ADDR6], out[RE_UDP_UL_PORT]);
 	ret = str_sprintf("%s E8\n", out[RE_UDP_COOKIE]);
 out:
@@ -2118,7 +2132,7 @@ static str *call_request_lookup_tcp(char **out, struct callmaster *m, enum call_
 	monologue_offer_answer(monologue, &s);
 
 	ret = streams_print(&monologue->medias, 1, s.length, NULL, SAF_TCP);
-	mutex_unlock(&c->master_lock);
+	rwlock_unlock_w(&c->master_lock);
 
 out2:
 	streams_free(&s);
@@ -2190,20 +2204,20 @@ static int call_delete_branch(struct callmaster *m, const str *callid, const str
 	goto success_unlock; /* XXX del full call */
 
 del_all:
-	mutex_unlock(&c->master_lock);
+	rwlock_unlock_w(&c->master_lock);
 	mylog(LOG_INFO, LOG_PREFIX_C "Deleting full call", LOG_PARAMS_C(c));
 	call_destroy(c);
 	goto success;
 
 success_unlock:
-	mutex_unlock(&c->master_lock);
+	rwlock_unlock_w(&c->master_lock);
 success:
 	ret = 0;
 	goto out;
 
 err:
 	if (c)
-		mutex_unlock(&c->master_lock);
+		rwlock_unlock_w(&c->master_lock);
 	ret = -1;
 	goto out;
 
@@ -2233,7 +2247,8 @@ str *call_delete_udp(char **out, struct callmaster *m) {
 
 #define SSUM(x) \
 	stats->totals[0].x += stream->stats.x;
-/* call must be locked */
+/* call->master_lock must be held in W */
+/* XXX possibly eliminate W lock, should work with R only */
 static void stats_query(struct call *call, const str *fromtag, const str *totag, struct call_stats *stats,
 	void (*cb)(struct packet_stream *, void *), void *arg)
 {
@@ -2263,7 +2278,6 @@ m_l_restart:
 
 	while (l) {
 		stream = l->data;
-		mutex_lock(&stream->lock);
 
 		if (stream->last_packet > stats->newest)
 			stats->newest = stream->last_packet;
@@ -2276,8 +2290,6 @@ m_l_restart:
 		SSUM(errors);
 
 		/* XXX more meaningful stats */
-
-		mutex_unlock(&stream->lock);
 
 		l = l->next;
 
@@ -2310,7 +2322,7 @@ str *call_query_udp(char **out, struct callmaster *m) {
 
 	stats_query(c, &fromtag, &totag, &stats, NULL, NULL);
 
-	mutex_unlock(&c->master_lock);
+	rwlock_unlock_w(&c->master_lock);
 
 	ret = str_sprintf("%s %lld "UINT64F" "UINT64F" "UINT64F" "UINT64F"\n", out[RE_UDP_COOKIE],
 		(long long int) m->conf.silent_timeout - (poller_now - stats.newest),
@@ -2320,7 +2332,7 @@ str *call_query_udp(char **out, struct callmaster *m) {
 
 err:
 	if (c)
-		mutex_unlock(&c->master_lock);
+		rwlock_unlock_w(&c->master_lock);
 	ret = str_sprintf("%s E8\n", out[RE_UDP_COOKIE]);
 	goto out;
 
@@ -2546,7 +2558,7 @@ static const char *call_offer_answer_ng(bencode_item_t *input, struct callmaster
 	monologue_offer_answer(monologue, &streams);
 	ret = sdp_replace(chopper, &parsed, monologue, &flags);
 
-	mutex_unlock(&call->master_lock);
+	rwlock_unlock_w(&call->master_lock);
 	redis_update(call, m->conf.redis);
 	obj_put(call);
 
@@ -2722,7 +2734,7 @@ const char *call_query_ng(bencode_item_t *input, struct callmaster *m, bencode_i
 
 	bencode_dictionary_add_string(output, "result", "ok");
 	ng_call_stats(call, &fromtag, &totag, output);
-	mutex_unlock(&call->master_lock);
+	rwlock_unlock_w(&call->master_lock);
 
 	return NULL;
 }

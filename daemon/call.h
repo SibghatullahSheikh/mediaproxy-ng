@@ -166,27 +166,32 @@ struct callstream {
 
 struct packet_stream {
 	struct obj		obj;
-	mutex_t			lock;
+	mutex_t			in_lock,
+				out_lock;
+	/* Both locks valid only with call->master_lock held in R.
+	 * Preempted by call->master_lock held in W.
+	 * If both in/out are to be locked, in_lock must be locked first. */
 
-	struct call_media	*media;
-	struct call		*call;
+	struct call_media	*media;		/* RO */
+	struct call		*call;		/* RO */
 
-	struct udp_fd		fd;
-	struct packet_stream	*rtp_sink;
-	struct packet_stream	*rtcp_sink;
-	const struct streamhandler *handler;
-	struct endpoint		endpoint;
-	struct endpoint		advertised_endpoint;
-	struct crypto_context_pair crypto;
+	struct udp_fd		fd;		/* RO */
+	struct packet_stream	*rtp_sink;	/* LOCK: call->master_lock */
+	struct packet_stream	*rtcp_sink;	/* LOCK: call->master_lock */
+	const struct streamhandler *handler;	/* LOCK: in_lock */
+	struct endpoint		endpoint;	/* LOCK: out_lock */
+	struct endpoint		advertised_endpoint; /* LOCK: call->master_lock */
+	struct crypto_context_pair crypto;	/* LOCK: in/out respectively */
 
-	struct stats		stats;
-	struct stats		kernel_stats;
-	time_t			last_packet;
+	struct stats		stats;		/* LOCK: in_lock */
+	struct stats		kernel_stats;	/* LOCK: in_lock */
+	time_t			last_packet;	/* LOCK: in_lock */
 
-	int			rtcp:1;
+	/* in_lock must be held for SETTING these: */
+	int			rtcp:1;	
 	int			has_rtcp_in_next:1;
 	int			implicit_rtcp:1;
-	int			stun:1;
+	int			stun:1;	
 	int			filled:1;
 	int			confirmed:1;
 	int			kernelized:1;
@@ -194,12 +199,13 @@ struct packet_stream {
 	int			has_handler:1;
 };
 
+/* protected by call->master_lock, except the RO elements */
 struct call_media {
-	struct call_monologue	*monologue;
-	struct call		*call;
+	struct call_monologue	*monologue;	/* RO */
+	struct call		*call;		/* RO */
 
-	unsigned int		index;
-	str			type;
+	unsigned int		index;		/* RO */
+	str			type;		/* RO */
 	enum transport_protocol	protocol;
 	int			desired_family;
 
@@ -208,39 +214,41 @@ struct call_media {
 
 	GQueue			streams; /* normally RTP + RTCP */
 
-	int			asynchronous:1;
+	int			asymmetric:1;
 	int			send:1;
 	int			receive:1;
 	int			rtcp_mux:1;
 };
 
 /* half a dialogue */
+/* protected by call->master_lock, except the RO elements */
 struct call_monologue {
-	struct call		*call;
+	struct call		*call;		/* RO */
 
-	str			tag;
-	time_t			created;
+	str			tag;	
+	time_t			created;	/* RO */
 	GHashTable		*other_tags;
 	struct call_monologue	*active_dialogue;
 
-	GQueue			medias;
+	GQueue			medias;	
 };
 
 struct call {
 	struct obj		obj;
 
-	struct callmaster	*callmaster;
+	struct callmaster	*callmaster;	/* RO */
 
 	mutex_t			buffer_lock;
 	call_buffer_t		buffer;
 
-	mutex_t			master_lock;
+	/* everything below protected by master_lock */
+	rwlock_t		master_lock;
 	GList			*monologues;
-	GHashTable		*tags;
+	GHashTable		*tags;	
 	//GHashTable		*branches;
 	GList			*streams;
 
-	str			callid;
+	str			callid;	
 	char			redis_uuid[37];
 	time_t			created;
 	time_t			last_signal;

@@ -214,6 +214,7 @@ typedef pthread_cond_t cond_t;
 #define MUTEX_STATIC_INIT PTHREAD_MUTEX_INITIALIZER
 
 #define rwlock_init(l) __debug_rwlock_init(l, __FILE__, __LINE__)
+#define rwlock_destroy(l) __debug_rwlock_destroy(l, __FILE__, __LINE__)
 #define rwlock_lock_r(l) __debug_rwlock_lock_r(l, __FILE__, __LINE__)
 #define rwlock_unlock_r(l) __debug_rwlock_unlock_r(l, __FILE__, __LINE__)
 #define rwlock_lock_w(l) __debug_rwlock_lock_w(l, __FILE__, __LINE__)
@@ -234,6 +235,7 @@ typedef pthread_cond_t cond_t;
 #define __debug_mutex_unlock(m, F, L) pthread_mutex_unlock(m)
 
 #define __debug_rwlock_init(l, F, L) pthread_rwlock_init(l, NULL)
+#define __debug_rwlock_destroy(l, F, L) pthread_rwlock_destroy(l)
 #define __debug_rwlock_lock_r(l, F, L) pthread_rwlock_rdlock(l)
 #define __debug_rwlock_unlock_r(l, F, L) pthread_rwlock_unlock(l)
 #define __debug_rwlock_lock_w(l, F, L) pthread_rwlock_wrlock(l)
