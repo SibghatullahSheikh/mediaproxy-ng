@@ -868,16 +868,20 @@ int sdp_streams(const GQueue *sessions, GQueue *streams, struct sdp_ng_flags *fl
 
 			attr = attr_get_by_id(&media->attributes, ATTR_CRYPTO);
 			if (attr) {
-				sp->crypto.crypto_suite = attr->u.crypto.crypto_suite;
-				sp->crypto.mki = attr->u.crypto.mki;
-				sp->crypto.mki_len = attr->u.crypto.mki_len;
-				sp->crypto.tag = attr->u.crypto.tag;
-				assert(sizeof(sp->crypto.master_key) >= attr->u.crypto.master_key.len);
-				assert(sizeof(sp->crypto.master_salt) >= attr->u.crypto.salt.len);
-				memcpy(sp->crypto.master_key, attr->u.crypto.master_key.s, attr->u.crypto.master_key.len);
-				memcpy(sp->crypto.master_salt, attr->u.crypto.salt.s, attr->u.crypto.salt.len);
-				assert(sizeof(sp->crypto.session_key) >= sp->crypto.crypto_suite->session_key_len);
-				assert(sizeof(sp->crypto.session_salt) >= sp->crypto.crypto_suite->session_salt_len);
+				sp->crypto.signal.crypto_suite = attr->u.crypto.crypto_suite;
+				sp->crypto.signal.mki = attr->u.crypto.mki;
+				sp->crypto.signal.mki_len = attr->u.crypto.mki_len;
+				sp->crypto.signal.tag = attr->u.crypto.tag;
+				assert(sizeof(sp->crypto.signal.master_key) >= attr->u.crypto.master_key.len);
+				assert(sizeof(sp->crypto.signal.master_salt) >= attr->u.crypto.salt.len);
+				memcpy(sp->crypto.signal.master_key, attr->u.crypto.master_key.s,
+						attr->u.crypto.master_key.len);
+				memcpy(sp->crypto.signal.master_salt, attr->u.crypto.salt.s,
+						attr->u.crypto.salt.len);
+				assert(sizeof(sp->crypto.signal.session_key)
+						>= sp->crypto.signal.crypto_suite->session_key_len);
+				assert(sizeof(sp->crypto.signal.session_salt)
+						>= sp->crypto.signal.crypto_suite->session_salt_len);
 			}
 
 			/* determine RTCP endpoint */
@@ -1382,12 +1386,12 @@ static int generate_crypto(struct sdp_media *media, struct sdp_ng_flags *flags,
 		src = &rtp->rtp_sink->crypto.in;
 
 		c = &rtp->crypto.out;
-		if (!c->crypto_suite)
+		if (!c->signal.crypto_suite)
 			*c = *src;
 
 		if (rtcp) {
 			c = &rtcp->crypto.out;
-			if (!c->crypto_suite)
+			if (!c->signal.crypto_suite)
 				*c = *src;
 		}
 
@@ -1395,27 +1399,27 @@ static int generate_crypto(struct sdp_media *media, struct sdp_ng_flags *flags,
 	}
 
 	c = &rtp->crypto.out;
-	if (!c->crypto_suite) {
-		c->crypto_suite = rtp->crypto.in.crypto_suite;
-		if (!c->crypto_suite)
-			c->crypto_suite = &crypto_suites[0];
-		random_string((unsigned char *) c->master_key,
-				c->crypto_suite->master_key_len);
-		random_string((unsigned char *) c->master_salt,
-				c->crypto_suite->master_salt_len);
+	if (!c->signal.crypto_suite) {
+		c->signal.crypto_suite = rtp->crypto.in.signal.crypto_suite;
+		if (!c->signal.crypto_suite)
+			c->signal.crypto_suite = &crypto_suites[0];
+		random_string((unsigned char *) c->signal.master_key,
+				c->signal.crypto_suite->master_key_len);
+		random_string((unsigned char *) c->signal.master_salt,
+				c->signal.crypto_suite->master_salt_len);
 		/* mki = mki_len = 0 */
-		c->tag = rtp->crypto.in.tag;
+		c->signal.tag = rtp->crypto.in.signal.tag;
 	}
 
-	assert(sizeof(b64_buf) >= (((c->crypto_suite->master_key_len
-				+ c->crypto_suite->master_salt_len)) / 3 + 1) * 4 + 4);
+	assert(sizeof(b64_buf) >= (((c->signal.crypto_suite->master_key_len
+				+ c->signal.crypto_suite->master_salt_len)) / 3 + 1) * 4 + 4);
 
 	p = b64_buf;
-	p += g_base64_encode_step((unsigned char *) c->master_key,
-			c->crypto_suite->master_key_len, 0,
+	p += g_base64_encode_step((unsigned char *) c->signal.master_key,
+			c->signal.crypto_suite->master_key_len, 0,
 			p, &state, &save);
-	p += g_base64_encode_step((unsigned char *) c->master_salt,
-			c->crypto_suite->master_salt_len, 0,
+	p += g_base64_encode_step((unsigned char *) c->signal.master_salt,
+			c->signal.crypto_suite->master_salt_len, 0,
 			p, &state, &save);
 	p += g_base64_encode_close(0, p, &state, &save);
 
@@ -1423,17 +1427,17 @@ static int generate_crypto(struct sdp_media *media, struct sdp_ng_flags *flags,
 		src = c;
 		c = &rtcp->crypto.out;
 
-		c->crypto_suite = src->crypto_suite;
-		c->tag = src->tag;
-		memcpy(c->master_key, src->master_key,
-				c->crypto_suite->master_key_len);
-		memcpy(c->master_salt, src->master_salt,
-				c->crypto_suite->master_salt_len);
+		c->signal.crypto_suite = src->signal.crypto_suite;
+		c->signal.tag = src->signal.tag;
+		memcpy(c->signal.master_key, src->signal.master_key,
+				c->signal.crypto_suite->master_key_len);
+		memcpy(c->signal.master_salt, src->signal.master_salt,
+				c->signal.crypto_suite->master_salt_len);
 	}
 
 	chopper_append_c(chop, "a=crypto:");
-	chopper_append_printf(chop, "%u ", c->tag);
-	chopper_append_c(chop, c->crypto_suite->name);
+	chopper_append_printf(chop, "%u ", c->signal.tag);
+	chopper_append_c(chop, c->signal.crypto_suite->name);
 	chopper_append_c(chop, " inline:");
 	chopper_append_dup(chop, b64_buf, p - b64_buf);
 	chopper_append_c(chop, "\r\n");

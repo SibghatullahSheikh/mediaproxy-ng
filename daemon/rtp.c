@@ -22,22 +22,22 @@ struct rtp_extension {
 static inline int check_session_keys(struct crypto_context *c) {
 	str s;
 
-	if (c->have_session_key)
+	if (c->signal.have_session_key)
 		return 0;
-	if (!c->crypto_suite)
+	if (!c->signal.crypto_suite)
 		goto error;
 
-	str_init_len(&s, c->session_key, c->crypto_suite->session_key_len);
+	str_init_len(&s, c->signal.session_key, c->signal.crypto_suite->session_key_len);
 	if (crypto_gen_session_key(c, &s, 0x00, 6))
 		goto error;
-	str_init_len(&s, c->session_auth_key, c->crypto_suite->srtp_auth_key_len);
+	str_init_len(&s, c->signal.session_auth_key, c->signal.crypto_suite->srtp_auth_key_len);
 	if (crypto_gen_session_key(c, &s, 0x01, 6))
 		goto error;
-	str_init_len(&s, c->session_salt, c->crypto_suite->session_salt_len);
+	str_init_len(&s, c->signal.session_salt, c->signal.crypto_suite->session_salt_len);
 	if (crypto_gen_session_key(c, &s, 0x02, 6))
 		goto error;
 
-	c->have_session_key = 1;
+	c->signal.have_session_key = 1;
 	crypto_init_session_key(c);
 
 	return 0;
@@ -96,15 +96,15 @@ static u_int64_t packet_index(struct crypto_context *c, struct rtp_header *rtp) 
 
 	seq = ntohs(rtp->seq_num);
 	/* rfc 3711 section 3.3.1 */
-	if (G_UNLIKELY(!c->last_index))
-		c->last_index = seq;
+	if (G_UNLIKELY(!c->oper.last_index))
+		c->oper.last_index = seq;
 
 	/* rfc 3711 appendix A, modified, and sections 3.3 and 3.3.1 */
-	index = (c->last_index & 0xffffffff0000ULL) | seq;
-	diff = index - c->last_index;
+	index = (c->oper.last_index & 0xffffffff0000ULL) | seq;
+	diff = index - c->oper.last_index;
 	if (diff >= 0) {
 		if (diff < 0x8000)
-			c->last_index = index;
+			c->oper.last_index = index;
 		else if (index >= 0x10000)
 			index -= 0x10000;
 	}
@@ -113,7 +113,7 @@ static u_int64_t packet_index(struct crypto_context *c, struct rtp_header *rtp) 
 			;
 		else {
 			index += 0x10000;
-			c->last_index = index;
+			c->oper.last_index = index;
 		}
 	}
 
@@ -124,28 +124,28 @@ void rtp_append_mki(str *s, struct crypto_context *c) {
 	u_int32_t mki_part;
 	char *p;
 
-	if (!c->mki_len)
+	if (!c->signal.mki_len)
 		return;
 
 	/* RTP_BUFFER_TAIL_ROOM guarantees enough room */
 	p = s->s + s->len;
-	memset(p, 0, c->mki_len);
-	if (c->mki_len > 4) {
-		mki_part = (c->mki & 0xffffffff00000000ULL) >> 32;
+	memset(p, 0, c->signal.mki_len);
+	if (c->signal.mki_len > 4) {
+		mki_part = (c->signal.mki & 0xffffffff00000000ULL) >> 32;
 		mki_part = htonl(mki_part);
-		if (c->mki_len < 8)
-			memcpy(p, ((char *) &mki_part) + (8 - c->mki_len), c->mki_len - 4);
+		if (c->signal.mki_len < 8)
+			memcpy(p, ((char *) &mki_part) + (8 - c->signal.mki_len), c->signal.mki_len - 4);
 		else
-			memcpy(p + (c->mki_len - 8), &mki_part, 4);
+			memcpy(p + (c->signal.mki_len - 8), &mki_part, 4);
 	}
-	mki_part = (c->mki & 0xffffffffULL);
+	mki_part = (c->signal.mki & 0xffffffffULL);
 	mki_part = htonl(mki_part);
-	if (c->mki_len < 4)
-		memcpy(p, ((char *) &mki_part) + (4 - c->mki_len), c->mki_len);
+	if (c->signal.mki_len < 4)
+		memcpy(p, ((char *) &mki_part) + (4 - c->signal.mki_len), c->signal.mki_len);
 	else
-		memcpy(p + (c->mki_len - 4), &mki_part, 4);
+		memcpy(p + (c->signal.mki_len - 4), &mki_part, 4);
 
-	s->len += c->mki_len;
+	s->len += c->signal.mki_len;
 }
 
 /* rfc 3711, section 3.3 */
@@ -170,9 +170,9 @@ int rtp_avp2savp(str *s, struct crypto_context *c) {
 
 	rtp_append_mki(s, c);
 
-	if (c->crypto_suite->srtp_auth_tag) {
-		c->crypto_suite->hash_rtp(c, s->s + s->len, &to_auth, index);
-		s->len += c->crypto_suite->srtp_auth_tag;
+	if (c->signal.crypto_suite->srtp_auth_tag) {
+		c->signal.crypto_suite->hash_rtp(c, s->s + s->len, &to_auth, index);
+		s->len += c->signal.crypto_suite->srtp_auth_tag;
 	}
 
 	return 0;
@@ -192,13 +192,13 @@ int rtp_savp2avp(str *s, struct crypto_context *c) {
 
 	index = packet_index(c, rtp);
 	if (srtp_payloads(&to_auth, &to_decrypt, &auth_tag, NULL,
-			c->crypto_suite->srtp_auth_tag, c->mki_len,
+			c->signal.crypto_suite->srtp_auth_tag, c->signal.mki_len,
 			s, &payload))
 		return -1;
 
 	if (auth_tag.len) {
 		assert(sizeof(hmac) >= auth_tag.len);
-		c->crypto_suite->hash_rtp(c, hmac, &to_auth, index);
+		c->signal.crypto_suite->hash_rtp(c, hmac, &to_auth, index);
 		if (str_memcmp(&auth_tag, hmac))
 			goto error;
 	}

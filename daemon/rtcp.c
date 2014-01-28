@@ -333,22 +333,22 @@ int rtcp_avpf2avp(str *s) {
 static inline int check_session_keys(struct crypto_context *c) {
 	str s;
 
-	if (c->have_session_key)
+	if (c->signal.have_session_key)
 		return 0;
-	if (!c->crypto_suite)
+	if (!c->signal.crypto_suite)
 		goto error;
 
-	str_init_len(&s, c->session_key, c->crypto_suite->session_key_len);
+	str_init_len(&s, c->signal.session_key, c->signal.crypto_suite->session_key_len);
 	if (crypto_gen_session_key(c, &s, 0x03, SRTCP_R_LENGTH))
 		goto error;
-	str_init_len(&s, c->session_auth_key, c->crypto_suite->srtcp_auth_key_len);
+	str_init_len(&s, c->signal.session_auth_key, c->signal.crypto_suite->srtcp_auth_key_len);
 	if (crypto_gen_session_key(c, &s, 0x04, SRTCP_R_LENGTH))
 		goto error;
-	str_init_len(&s, c->session_salt, c->crypto_suite->session_salt_len);
+	str_init_len(&s, c->signal.session_salt, c->signal.crypto_suite->session_salt_len);
 	if (crypto_gen_session_key(c, &s, 0x05, SRTCP_R_LENGTH))
 		goto error;
 
-	c->have_session_key = 1;
+	c->signal.have_session_key = 1;
 	crypto_init_session_key(c);
 
 	return 0;
@@ -397,19 +397,19 @@ int rtcp_avp2savp(str *s, struct crypto_context *c) {
 	if (check_session_keys(c))
 		return -1;
 
-	if (crypto_encrypt_rtcp(c, rtcp, &payload, c->last_index))
+	if (crypto_encrypt_rtcp(c, rtcp, &payload, c->oper.last_index))
 		return -1;
 
 	idx = (void *) s->s + s->len;
-	*idx = htonl(0x80000000ULL | c->last_index++);
+	*idx = htonl(0x80000000ULL | c->oper.last_index++);
 	s->len += sizeof(*idx);
 
 	to_auth = *s;
 
 	rtp_append_mki(s, c);
 
-	c->crypto_suite->hash_rtcp(c, s->s + s->len, &to_auth);
-	s->len += c->crypto_suite->srtcp_auth_tag;
+	c->signal.crypto_suite->hash_rtcp(c, s->s + s->len, &to_auth);
+	s->len += c->signal.crypto_suite->srtcp_auth_tag;
 
 	return 1;
 }
@@ -429,7 +429,7 @@ int rtcp_savp2avp(str *s, struct crypto_context *c) {
 		return -1;
 
 	if (srtp_payloads(&to_auth, &to_decrypt, &auth_tag, NULL,
-			c->crypto_suite->srtcp_auth_tag, c->mki_len,
+			c->signal.crypto_suite->srtcp_auth_tag, c->signal.mki_len,
 			s, &payload))
 		return -1;
 
@@ -441,7 +441,7 @@ int rtcp_savp2avp(str *s, struct crypto_context *c) {
 	idx = ntohl(*idx_p);
 
 	assert(sizeof(hmac) >= auth_tag.len);
-	c->crypto_suite->hash_rtcp(c, hmac, &to_auth);
+	c->signal.crypto_suite->hash_rtcp(c, hmac, &to_auth);
 	err = "authentication failed";
 	if (str_memcmp(&auth_tag, hmac))
 		goto error;

@@ -422,19 +422,19 @@ static int __k_null(struct mediaproxy_srtp *s, struct packet_stream *stream) {
 	return 0;
 }
 static int __k_srtp_crypt(struct mediaproxy_srtp *s, struct crypto_context *c) {
-	if (!c->crypto_suite)
+	if (!c->signal.crypto_suite)
 		return -1;
 
 	*s = (struct mediaproxy_srtp) {
-		.cipher		= c->crypto_suite->kernel_cipher,
-		.hmac		= c->crypto_suite->kernel_hmac,
-		.mki		= c->mki,
-		.mki_len	= c->mki_len,
-		.last_index	= c->last_index,
-		.auth_tag_len	= c->crypto_suite->srtp_auth_tag,
+		.cipher		= c->signal.crypto_suite->kernel_cipher,
+		.hmac		= c->signal.crypto_suite->kernel_hmac,
+		.mki		= c->signal.mki,
+		.mki_len	= c->signal.mki_len,
+		.last_index	= c->oper.last_index,
+		.auth_tag_len	= c->signal.crypto_suite->srtp_auth_tag,
 	};
-	memcpy(s->master_key, c->master_key, c->crypto_suite->master_key_len);
-	memcpy(s->master_salt, c->master_salt, c->crypto_suite->master_salt_len);
+	memcpy(s->master_key, c->signal.master_key, c->signal.crypto_suite->master_key_len);
+	memcpy(s->master_salt, c->signal.master_salt, c->signal.crypto_suite->master_salt_len);
 	return 0;
 }
 static int __k_srtp_encrypt(struct mediaproxy_srtp *s, struct packet_stream *stream) {
@@ -1092,14 +1092,14 @@ static void callmaster_timer(void *ptr) {
 		if (sink)
 			mutex_lock(&sink->out_lock);
 
-		if (sink && sink->crypto.out.crypto_suite
-				&& ke->target.encrypt.last_index - sink->crypto.out.last_index > 0x4000) {
-			sink->crypto.out.last_index = ke->target.encrypt.last_index;
+		if (sink && sink->crypto.out.signal.crypto_suite
+				&& ke->target.encrypt.last_index - sink->crypto.out.oper.last_index > 0x4000) {
+			sink->crypto.out.oper.last_index = ke->target.encrypt.last_index;
 			update = 1;
 		}
-		if (ps->crypto.in.crypto_suite
-				&& ke->target.decrypt.last_index - ps->crypto.in.last_index > 0x4000) {
-			ps->crypto.in.last_index = ke->target.decrypt.last_index;
+		if (ps->crypto.in.signal.crypto_suite
+				&& ke->target.decrypt.last_index - ps->crypto.in.oper.last_index > 0x4000) {
+			ps->crypto.in.oper.last_index = ke->target.decrypt.last_index;
 			update = 1;
 		}
 
@@ -1454,7 +1454,7 @@ static struct packet_stream *__fill_stream(struct call_media *media, GList **ite
 
 	s->filled = 1;
 	s->has_handler = 0;
-	s->crypto.in = sp->crypto;
+	s->crypto.in.signal = sp->crypto.signal;
 
 	return s;
 }
