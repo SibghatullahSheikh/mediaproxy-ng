@@ -1338,6 +1338,64 @@ static void stream_free(void *p) {
 	obj_put(s->call);
 }
 
+static int __stream_params_match(struct packet_stream *ps, struct stream_params *sp) {
+	if (!ps->filled)
+		return 1;
+	if (ps->seqnum)
+		return 0;
+	if (memcmp(&sp->rtp_endpoint, &ps->advertised_endpoint, sizeof(sp->rtp_endpoint)))
+		return 0;
+	return 1;
+}
+
+static void __stream_params_confirm(struct call_media *A, struct call_media *B, struct stream_params *sp) {
+	struct packet_stream *endpoint;
+
+	if (!B->streams.length)
+		return;
+
+	endpoint = B->streams.head->data;
+
+	if (__stream_params_match(endpoint, sp))
+		return;
+
+	DBG("media params found mismatched for #%u, flushing streams", A->index);
+	g_queue_clear(&A->streams);
+	g_queue_clear(&B->streams);
+}
+
+static int __find_historic_streams(struct call_media *media, unsigned int num_ports, struct stream_params *sp) {
+	GQueue streams = G_QUEUE_INIT;
+	GList *l;
+	struct packet_stream *ps;
+	unsigned int seqnum;
+
+	for (l = media->streams_history.head; l; l = l->next) {
+		ps = l->data;
+		if (__stream_params_match(ps, sp))
+			goto match;
+	}
+
+	return -1;
+
+match:
+	g_queue_push_tail(&streams, ps);
+	seqnum = 1;
+	while (--num_ports > 0) {
+		l = l->next;
+		if (!l)
+			goto fail;
+		ps = l->data;
+		if (ps->seqnum != seqnum)
+			goto fail;
+		g_queue_push_tail(&streams, ps);
+	}
+
+fail:
+	g_queue_clear(&streams);
+	return -1;
+}
+
 static int __num_media_streams(struct call_media *media, unsigned int num_ports) {
 	struct udp_fd fd_arr[16];
 	struct packet_stream *stream;
@@ -1346,7 +1404,8 @@ static int __num_media_streams(struct call_media *media, unsigned int num_ports)
 	struct poller_item pi;
 	struct poller *po = call->callmaster->poller;
 
-	DBG("media stream #%u wants %u ports", media->index, num_ports);
+	DBG("media stream #%u wants %u ports, we have %u already",
+			media->index, num_ports, media->streams.length);
 	if (media->streams.length >= num_ports)
 		return 0;
 	if (num_ports > G_N_ELEMENTS(fd_arr))
@@ -1362,11 +1421,13 @@ static int __num_media_streams(struct call_media *media, unsigned int num_ports)
 		stream = obj_alloc0("packet_stream", sizeof(*stream), stream_free);
 		mutex_init(&stream->in_lock);
 		mutex_init(&stream->out_lock);
+		stream->seqnum = i;
 		stream->call = obj_get(call);
 		stream->media = media;
 		stream->fd = fd_arr[i];
 		stream->last_packet = poller_now;
 		g_queue_push_tail(&media->streams, stream);
+		g_queue_push_tail(&media->streams_history, stream);
 		call->streams = g_list_prepend(call->streams, stream);
 
 		ZERO(pi);
@@ -1381,7 +1442,7 @@ static int __num_media_streams(struct call_media *media, unsigned int num_ports)
 	return 0;
 }
 
-static struct packet_stream *__get_stream(struct call_media *media, GList **iter) {
+static struct packet_stream *__fill_stream(struct call_media *media, GList **iter, struct stream_params *sp) {
 	struct packet_stream *s;
 
 	if (!*iter)
@@ -1390,6 +1451,11 @@ static struct packet_stream *__get_stream(struct call_media *media, GList **iter
 		*iter = (*iter)->next;
 
 	s = (*iter)->data;
+
+	s->filled = 1;
+	s->has_handler = 0;
+	s->crypto.in = sp->crypto;
+
 	return s;
 }
 
@@ -1447,13 +1513,21 @@ static int monologue_offer_answer(struct call_monologue *monologue, GQueue *stre
 				media->desired_family = AF_INET6;
 		}
 
+		/* in case of a re-invite, determine whether we need a new set of
+		 * ports, based on the media params received. if found mismatched,
+		 * new ports will be allocated for both sides. */
+		__stream_params_confirm(media, other_media, sp);
+
 		/* determine number of consecutive ports needed locally. we don't
 		 * multiplex on our side by default.
 		 * XXX only do *=2 for RTP streams? */
 		num_ports = sp->consecutive_ports;
 		num_ports *= 2;
 
-		if (__num_media_streams(media, num_ports))
+		/* if we need any ports at all, use old ones or allocate new ones */
+		if (!__find_historic_streams(media, num_ports, sp))
+			;
+		else if (__num_media_streams(media, num_ports))
 			goto error;
 		/* we may not need the same number of ports, but allocate them anyway,
 		 * just in case */
@@ -1467,22 +1541,17 @@ static int monologue_offer_answer(struct call_monologue *monologue, GQueue *stre
 
 		while (iter) {
 			stream = iter->data;
+			stream->has_handler = 0; /* XXX polymorph this */
 
 			if (!(i & 1) || media->rtcp_mux) {
 				/* RTP */
-				other_stream = __get_stream(other_media, &other_iter);
+				other_stream = __fill_stream(other_media, &other_iter, sp);
 
 				stream->rtp_sink = other_stream;
 				other_stream->rtp_sink = stream;
 
 				other_stream->endpoint = sp->rtp_endpoint;
 				other_stream->advertised_endpoint = other_stream->endpoint;
-
-				other_stream->crypto.in = sp->crypto;
-
-				/* XXX polymorph this */
-				stream->has_handler = 0;
-				other_stream->has_handler = 0;
 
 				/* only possible in answer (?) - saved from offer */
 				if (media->rtcp_mux)
@@ -1505,33 +1574,25 @@ rtcp:
 				/* endpoint already set */
 			}
 			else if (sp->rtcp_endpoint.port) {
-				other_stream = __get_stream(other_media, &other_iter);
+				other_stream = __fill_stream(other_media, &other_iter, sp);
 
 				other_stream->endpoint = sp->rtcp_endpoint;
 				other_stream->advertised_endpoint = other_stream->endpoint;
-
-				other_stream->crypto.in = sp->crypto;
 			}
 			else {
-				other_stream = __get_stream(other_media, &other_iter);
+				other_stream = __fill_stream(other_media, &other_iter, sp);
 
 				other_stream->implicit_rtcp = 1;
 				other_stream->endpoint = sp->rtp_endpoint;
 				other_stream->endpoint.port++;
 				other_stream->advertised_endpoint = other_stream->endpoint;
-
-				other_stream->crypto.in = sp->crypto;
 			}
 
 			stream->rtcp_sink = other_stream;
 			other_stream->rtcp_sink = stream;
 			other_stream->rtcp = 1;
 
-			stream->has_handler = 0;
-			other_stream->has_handler = 0;
-
 next:
-			other_stream->filled = 1;
 			iter = iter->next;
 			i++;
 		}
@@ -1811,6 +1872,7 @@ static void __call_free(void *p) {
 		for (it = m->medias.head; it; it = it->next) {
 			md = it->data;
 			g_queue_clear(&md->streams);
+			g_queue_clear(&md->streams_history);
 			g_slice_free1(sizeof(*md), md);
 		}
 		g_queue_clear(&m->medias);

@@ -109,6 +109,7 @@ struct packet_stream {
 	 * Preempted by call->master_lock held in W.
 	 * If both in/out are to be locked, in_lock must be locked first. */
 
+	unsigned int		seqnum;		/* RO */
 	struct call_media	*media;		/* RO */
 	struct call		*call;		/* RO */
 
@@ -151,6 +152,7 @@ struct call_media {
 	str			ice_pwd;
 
 	GQueue			streams; /* normally RTP + RTCP */
+	GQueue			streams_history;
 
 	int			asymmetric:1;
 	int			send:1;
