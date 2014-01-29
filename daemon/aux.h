@@ -73,6 +73,12 @@ static inline int g_hash_table_contains(GHashTable *h, const void *k) {
 }
 #endif
 
+static inline void g_queue_move(GQueue *dst, GQueue *src) {
+	GList *l;
+	while ((l = g_queue_pop_head_link(src)))
+		g_queue_push_tail_link(dst, l);
+}
+
 
 static inline void strmove(char **d, char **s) {
 	if (*d)

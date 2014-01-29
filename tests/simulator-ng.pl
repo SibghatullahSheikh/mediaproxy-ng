@@ -12,6 +12,7 @@ use Time::HiRes;
 use Crypt::Rijndael;
 use Digest::SHA qw(hmac_sha1);
 use MIME::Base64;
+use Data::Dumper;
 
 my ($NUM, $RUNTIME, $STREAMS, $PAYLOAD, $INTERVAL, $RTCP_INTERVAL, $STATS_INTERVAL)
 	= (1000, 30, 1, 160, 20, 5, 5);
@@ -710,11 +711,18 @@ a=rtcp:$cp
 	$RTCPMUX && $i and ($$o{sdp} =~ /a=rtcp-mux/s or die);
 	my @rp_ports = $$o{sdp} =~ /m=audio (\d+) \Q$$tr_o{name}\E /gs or die;
 	$rp_af ne $$pr_o{reply} and die "incorrect address family reply code";
+	my $old_outputs = $$c{outputs}[$i];
 	my $rpl_a = $$c{outputs} || ($$c{outputs} = []);
 	my $rpl_t = $$rpl_a[$i] = [];
 	for my $rpl (@rp_ports) {
 		$rpl == 0 and die "mediaproxy ran out of ports";
 		push(@$rpl_t, [$rpl,$rp_add]);
+		my $oa = shift(@$old_outputs);
+		if (defined($oa) && $$oa[0] != $rpl) {
+			print("port change: $$oa[0] -> $rpl\n");
+			#print(Dumper($i, $c) . "\n");
+			undef($$c{trans_contexts}[$i]{out}{rtcp_index})
+		}
 	}
 	$$tr_o{sdp_parse_func} and $$tr_o{sdp_parse_func}($$o{sdp}, $tcx_o, $tcx);
 }
@@ -735,7 +743,7 @@ my $rtptime = Time::HiRes::gettimeofday();
 my $rtcptime = $rtptime;
 my $countstart = $rtptime;
 my $countstop = $countstart + $STATS_INTERVAL;
-my $last_reinv = 0;
+my $last_reinv = $rtptime;
 while (time() < $end) {
 	my $now = Time::HiRes::gettimeofday();
 	$now <= $rtptime and Time::HiRes::sleep($rtptime - $now);
@@ -762,7 +770,7 @@ while (time() < $end) {
 
 	@calls = sort {rand() < .5} grep(defined, @calls);
 
-	if ($REINVITES && $now >= $last_reinv + 5) {
+	if ($REINVITES && $now >= $last_reinv + 15) {
 		$last_reinv = $now;
 		my $c = $calls[rand(@calls)];
 		print("simulating re-invite on $$c{callid_viabranch}[0]");
@@ -770,6 +778,8 @@ while (time() < $end) {
 			if (rand() < .5) {
 				print(", side $sides[$i]: new port");
 				undef($$c{fds}[$i]);
+				#print("\n" . Dumper($i, $c) . "\n");
+				undef($$c{trans_contexts}[$i]{in}{rtcp_index});
 				$NUM_STREAMS--;
 			}
 			else {

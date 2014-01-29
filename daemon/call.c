@@ -1370,12 +1370,16 @@ static int __find_historic_streams(struct call_media *media, unsigned int num_po
 	struct packet_stream *ps;
 	unsigned int seqnum;
 
+	DBG("looking for %u historic streams", num_ports);
+	/* XXX use hash table for this? */
+	/* XXX limit number of streams kept in history */
 	for (l = media->streams_history.head; l; l = l->next) {
 		ps = l->data;
 		if (__stream_params_match(ps, sp))
 			goto match;
 	}
 
+	DBG("no historic streams matched");
 	return -1;
 
 match:
@@ -1391,7 +1395,13 @@ match:
 		g_queue_push_tail(&streams, ps);
 	}
 
+	DBG("found usable historic streams");
+	g_queue_clear(&media->streams);
+	g_queue_move(&media->streams, &streams);
+	return 0;
+
 fail:
+	DBG("not enough historic streams present");
 	g_queue_clear(&streams);
 	return -1;
 }

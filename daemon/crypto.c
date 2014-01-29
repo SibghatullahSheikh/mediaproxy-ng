@@ -278,7 +278,7 @@ static int aes_cm_encrypt(struct crypto_context *c, u_int32_t ssrc, str *s, u_in
 	ivi[2] ^= idxh;
 	ivi[3] ^= idxl;
 
-	aes_ctr_128(s->s, s, c->signal.session_key_ctx[0], (char *) iv);
+	aes_ctr_128(s->s, s, c->oper.session_key_ctx[0], (char *) iv);
 
 	return 0;
 }
@@ -305,7 +305,7 @@ static void aes_128_f8_encrypt(struct crypto_context *c, unsigned char *iv, str 
 	u_int64_t *pi, *ki, *lki, *xi;
 	u_int32_t *xu;
 
-	EVP_EncryptUpdate(c->signal.session_key_ctx[1], ivx, &outlen, iv, 16);
+	EVP_EncryptUpdate(c->oper.session_key_ctx[1], ivx, &outlen, iv, 16);
 	assert(outlen == 16);
 
 	pi = (void *) s->s;
@@ -326,7 +326,7 @@ static void aes_128_f8_encrypt(struct crypto_context *c, unsigned char *iv, str 
 		xi[0] ^= lki[0];
 		xi[1] ^= lki[1];
 
-		EVP_EncryptUpdate(c->signal.session_key_ctx[0], key_block, &outlen, x, 16);
+		EVP_EncryptUpdate(c->oper.session_key_ctx[0], key_block, &outlen, x, 16);
 		assert(outlen == 16);
 
 		if (G_UNLIKELY(left < 16)) {
@@ -418,9 +418,9 @@ static int hmac_sha1_rtcp(struct crypto_context *c, char *out, str *in) {
 static int aes_cm_session_key_init(struct crypto_context *c) {
 	evp_session_key_cleanup(c);
 
-	c->signal.session_key_ctx[0] = g_slice_alloc(sizeof(EVP_CIPHER_CTX));
-	EVP_CIPHER_CTX_init(c->signal.session_key_ctx[0]);
-	EVP_EncryptInit_ex(c->signal.session_key_ctx[0], EVP_aes_128_ecb(), NULL,
+	c->oper.session_key_ctx[0] = g_slice_alloc(sizeof(EVP_CIPHER_CTX));
+	EVP_CIPHER_CTX_init(c->oper.session_key_ctx[0]);
+	EVP_EncryptInit_ex(c->oper.session_key_ctx[0], EVP_aes_128_ecb(), NULL,
 			(unsigned char *) c->signal.session_key, NULL);
 	return 0;
 }
@@ -445,9 +445,9 @@ static int aes_f8_session_key_init(struct crypto_context *c) {
 	for (i = 0; i < k_e_len; i++)
 		m[i] ^= key[i];
 
-	c->signal.session_key_ctx[1] = g_slice_alloc(sizeof(EVP_CIPHER_CTX));
-	EVP_CIPHER_CTX_init(c->signal.session_key_ctx[1]);
-	EVP_EncryptInit_ex(c->signal.session_key_ctx[1], EVP_aes_128_ecb(), NULL, m, NULL);
+	c->oper.session_key_ctx[1] = g_slice_alloc(sizeof(EVP_CIPHER_CTX));
+	EVP_CIPHER_CTX_init(c->oper.session_key_ctx[1]);
+	EVP_EncryptInit_ex(c->oper.session_key_ctx[1], EVP_aes_128_ecb(), NULL, m, NULL);
 
 	return 0;
 }
@@ -456,14 +456,14 @@ static int evp_session_key_cleanup(struct crypto_context *c) {
 	unsigned char block[16];
 	int len, i;
 
-	for (i = 0; i < G_N_ELEMENTS(c->signal.session_key_ctx); i++) {
-		if (!c->signal.session_key_ctx[i])
+	for (i = 0; i < G_N_ELEMENTS(c->oper.session_key_ctx); i++) {
+		if (!c->oper.session_key_ctx[i])
 			continue;
 
-		EVP_EncryptFinal_ex(c->signal.session_key_ctx[i], block, &len);
-		EVP_CIPHER_CTX_cleanup(c->signal.session_key_ctx[i]);
-		g_slice_free1(sizeof(EVP_CIPHER_CTX), c->signal.session_key_ctx[i]);
-		c->signal.session_key_ctx[i] = NULL;
+		EVP_EncryptFinal_ex(c->oper.session_key_ctx[i], block, &len);
+		EVP_CIPHER_CTX_cleanup(c->oper.session_key_ctx[i]);
+		g_slice_free1(sizeof(EVP_CIPHER_CTX), c->oper.session_key_ctx[i]);
+		c->oper.session_key_ctx[i] = NULL;
 	}
 
 	return 0;

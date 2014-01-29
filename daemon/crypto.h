@@ -60,8 +60,6 @@ struct crypto_context {
 		char session_salt[14]; /* k_s */
 		char session_auth_key[20];
 
-		void *session_key_ctx[2];
-
 		int have_session_key:1;
 	} signal;
 
@@ -70,6 +68,7 @@ struct crypto_context {
 		/* XXX replay list */
 		/* <from, to>? */
 
+		void *session_key_ctx[2];
 	} oper;
 };
 
@@ -117,16 +116,6 @@ static inline void crypto_cleanup(struct crypto_context *c) {
 		return;
 	if (c->signal.crypto_suite->session_key_cleanup)
 		c->signal.crypto_suite->session_key_cleanup(c);
-}
-static inline void crypto_context_move(struct crypto_context *dst, struct crypto_context *src) {
-	int i;
-
-	if (src == dst)
-		return;
-	crypto_cleanup(dst);
-	*dst = *src;
-	for (i = 0; i < G_N_ELEMENTS(src->signal.session_key_ctx); i++)
-		src->signal.session_key_ctx[i] = NULL;
 }
 
 
