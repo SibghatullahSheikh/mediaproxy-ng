@@ -101,25 +101,37 @@ struct stream_params {
 	int			rtcp_mux:1;
 };
 
-struct packet_stream {
+struct stream_fd {
 	struct obj		obj;
+	struct udp_fd		fd;		/* RO */
+	struct call		*call;		/* RO */
+	struct packet_stream	*stream;	/* LOCK: call->master_lock */
+	struct crypto_context	crypto;		/* IN direction, LOCK: stream->in_lock */
+};
+
+struct endpoint_map {
+	struct endpoint		endpoint;
+	GQueue			sfds;
+	int			wildcard:1;
+};
+
+struct packet_stream {
 	mutex_t			in_lock,
 				out_lock;
 	/* Both locks valid only with call->master_lock held in R.
 	 * Preempted by call->master_lock held in W.
 	 * If both in/out are to be locked, in_lock must be locked first. */
 
-	unsigned int		seqnum;		/* RO */
 	struct call_media	*media;		/* RO */
 	struct call		*call;		/* RO */
 
-	struct udp_fd		fd;		/* RO */
+	struct stream_fd	*sfd;		/* LOCK: call->master_lock */
 	struct packet_stream	*rtp_sink;	/* LOCK: call->master_lock */
 	struct packet_stream	*rtcp_sink;	/* LOCK: call->master_lock */
 	const struct streamhandler *handler;	/* LOCK: in_lock */
 	struct endpoint		endpoint;	/* LOCK: out_lock */
-	struct endpoint		advertised_endpoint; /* LOCK: call->master_lock */
-	struct crypto_context_pair crypto;	/* LOCK: in/out respectively */
+	struct endpoint		advertised_endpoint; /* RO */
+	struct crypto_context	crypto;		/* OUT direction, LOCK: out_lock */
 
 	struct stats		stats;		/* LOCK: in_lock */
 	struct stats		kernel_stats;	/* LOCK: in_lock */
@@ -152,7 +164,7 @@ struct call_media {
 	str			ice_pwd;
 
 	GQueue			streams; /* normally RTP + RTCP */
-	GQueue			streams_history;
+	GList			*endpoint_maps; /* singly linked list? XXX */
 
 	int			asymmetric:1;
 	int			send:1;
@@ -187,6 +199,7 @@ struct call {
 	GHashTable		*tags;	
 	//GHashTable		*branches;
 	GList			*streams;
+	GList			*stream_fds; /* XXX single linked list? */
 
 	str			callid;	
 	char			redis_uuid[37];

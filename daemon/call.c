@@ -267,14 +267,14 @@ static void ng_call_stats(struct call *call, const str *fromtag, const str *tota
 
 
 /* called lock-free */
-static void stream_closed(int fd, void *p, uintptr_t u) {
-	struct packet_stream *stream = p;
-	struct call *c = NULL;
+static void stream_fd_closed(int fd, void *p, uintptr_t u) {
+	struct stream_fd *sfd = p;
+	struct call *c;
 	int i;
 	socklen_t j;
 
-	assert(stream->fd.fd == fd);
-	c = stream->call;
+	assert(sfd->fd.fd == fd);
+	c = sfd->call;
 	if (!c)
 		return;
 
@@ -301,7 +301,7 @@ void kernelize(struct packet_stream *stream) {
 		goto no_kernel;
 
 	mylog(LOG_DEBUG, LOG_PREFIX_C "Kernelizing media stream with local port %u",
-			LOG_PARAMS_C(call), stream->fd.localport);
+			LOG_PARAMS_C(call), stream->sfd->fd.localport);
 
 	sink = stream->rtp_sink;
 	if (!sink && stream->rtcp)
@@ -325,9 +325,9 @@ void kernelize(struct packet_stream *stream) {
 
 	mutex_lock(&sink->out_lock);
 
-	mpt.target_port = stream->fd.localport;
+	mpt.target_port = stream->sfd->fd.localport;
 	mpt.tos = cm->conf.tos;
-	mpt.src_addr.port = sink->fd.localport;
+	mpt.src_addr.port = sink->sfd->fd.localport;
 	mpt.dst_addr.port = sink->endpoint.port;
 	mpt.rtcp_mux = stream->media->rtcp_mux;
 
@@ -380,41 +380,24 @@ static int call_avpf2avp_rtcp(str *s, struct packet_stream *stream) {
 	return rtcp_avpf2avp(s);
 }
 static int call_avp2savp_rtp(str *s, struct packet_stream *stream) {
-	return rtp_avp2savp(s, &stream->crypto.out);
+	return rtp_avp2savp(s, &stream->crypto);
 }
 static int call_avp2savp_rtcp(str *s, struct packet_stream *stream) {
-	return rtcp_avp2savp(s, &stream->crypto.out);
+	return rtcp_avp2savp(s, &stream->crypto);
 }
 static int call_savp2avp_rtp(str *s, struct packet_stream *stream) {
-	return rtp_savp2avp(s, &stream->crypto.in);
+	return rtp_savp2avp(s, &stream->sfd->crypto);
 }
 static int call_savp2avp_rtcp(str *s, struct packet_stream *stream) {
-	return rtcp_savp2avp(s, &stream->crypto.in);
+	return rtcp_savp2avp(s, &stream->sfd->crypto);
 }
-//static int call_avpf2savp_rtcp(str *s, struct packet_stream *stream) {
-//	int ret;
-//	ret = rtcp_avpf2avp(s);
-//	if (ret < 0)
-//		return ret;
-//	return rtcp_avp2savp(s, &stream->crypto.out);
-//}
 static int call_savpf2avp_rtcp(str *s, struct packet_stream *stream) {
 	int ret;
-	ret = rtcp_savp2avp(s, &stream->crypto.in);
+	ret = rtcp_savp2avp(s, &stream->sfd->crypto);
 	if (ret < 0)
 		return ret;
 	return rtcp_avpf2avp(s);
 }
-//static int call_savpf2savp_rtcp(str *s, struct packet_stream *stream) {
-//	int ret;
-//	ret = rtcp_savp2avp(s, &stream->crypto.in);
-//	if (ret < 0)
-//		return ret;
-//	ret = rtcp_avpf2avp(s);
-//	if (ret < 0)
-//		return ret;
-//	return rtcp_avp2savp(s, &stream->crypto.out);
-//}
 
 
 static int __k_null(struct mediaproxy_srtp *s, struct packet_stream *stream) {
@@ -438,10 +421,10 @@ static int __k_srtp_crypt(struct mediaproxy_srtp *s, struct crypto_context *c) {
 	return 0;
 }
 static int __k_srtp_encrypt(struct mediaproxy_srtp *s, struct packet_stream *stream) {
-	return __k_srtp_crypt(s, &stream->crypto.out);
+	return __k_srtp_crypt(s, &stream->crypto);
 }
 static int __k_srtp_decrypt(struct mediaproxy_srtp *s, struct packet_stream *stream) {
-	return __k_srtp_crypt(s, &stream->crypto.in);
+	return __k_srtp_crypt(s, &stream->sfd->crypto);
 }
 
 /* must be called with call->master_lock held in R, and in->in_lock and out->out_lock held */
@@ -510,7 +493,8 @@ void callmaster_msg_mh_src(struct callmaster *cm, struct msghdr *mh) {
 }
 
 /* called lock-free */
-static int stream_packet(struct packet_stream *stream, str *s, struct sockaddr_in6 *fsin) {
+static int stream_packet(struct stream_fd *sfd, str *s, struct sockaddr_in6 *fsin) {
+	struct packet_stream *stream = sfd->stream;
 	struct packet_stream *sink = NULL;
 	struct call_media *media;
 	int ret = 0, update = 0, stun_ret = 0, handler_ret = 0, muxed_rtcp = 0, rtcp = 0;
@@ -525,6 +509,7 @@ static int stream_packet(struct packet_stream *stream, str *s, struct sockaddr_i
 	struct endpoint endpoint;
 	rewrite_func rwf_in, rwf_out;
 
+	assert(stream != NULL);
 	media = stream->media;
 	call = stream->call;
 	cm = call->callmaster;
@@ -556,9 +541,9 @@ static int stream_packet(struct packet_stream *stream, str *s, struct sockaddr_i
 		rtcp = 1;
 	}
 
-	if (!sink || sink->fd.fd == -1) {
+	if (!sink || !sink->sfd) {
 		mylog(LOG_WARNING, LOG_PREFIX_C "RTP packet to port %u discarded from %s", 
-			LOG_PARAMS_C(call), stream->fd.localport, addr);
+			LOG_PARAMS_C(call), sfd->fd.localport, addr);
 		stream->stats.errors++;
 		mutex_lock(&cm->statspslock);
 		cm->statsps.errors++;
@@ -605,7 +590,7 @@ use_cand:
 		goto peerinfo;
 
 	mylog(LOG_DEBUG, LOG_PREFIX_C "Confirmed peer information for port %u - %s", 
-		LOG_PARAMS_C(call), stream->fd.localport, addr);
+		LOG_PARAMS_C(call), sfd->fd.localport, addr);
 
 	stream->confirmed = 1;
 	update = 1;
@@ -668,7 +653,7 @@ forward:
 	mh.msg_iov = &iov;
 	mh.msg_iovlen = 1;
 
-	ret = sendmsg(sink->fd.fd, &mh, 0);
+	ret = sendmsg(sink->sfd->fd.fd, &mh, 0);
 
 	if (ret == -1) {
 		stream->stats.errors++;
@@ -706,8 +691,8 @@ done:
 
 
 
-static void stream_readable(int fd, void *p, uintptr_t u) {
-	struct packet_stream *stream = p;
+static void stream_fd_readable(int fd, void *p, uintptr_t u) {
+	struct stream_fd *sfd = p;
 	char buf[RTP_BUFFER_SIZE];
 	int ret;
 	struct sockaddr_storage ss;
@@ -719,7 +704,7 @@ static void stream_readable(int fd, void *p, uintptr_t u) {
 	struct call *ca;
 	str s;
 
-	if (stream->fd.fd != fd)
+	if (sfd->fd.fd != fd)
 		goto out;
 
 	for (;;) {
@@ -732,7 +717,7 @@ static void stream_readable(int fd, void *p, uintptr_t u) {
 				continue;
 			if (errno == EAGAIN || errno == EWOULDBLOCK)
 				break;
-			stream_closed(fd, stream, 0);
+			stream_fd_closed(fd, sfd, 0);
 			return;
 		}
 		if (ret >= MAX_RTP_PACKET_SIZE)
@@ -749,10 +734,10 @@ static void stream_readable(int fd, void *p, uintptr_t u) {
 		}
 
 		str_init_len(&s, buf + RTP_BUFFER_HEAD_ROOM, ret);
-		ret = stream_packet(stream, &s, sinp);
+		ret = stream_packet(sfd, &s, sinp);
 		if (ret == -1) {
 			mylog(LOG_WARNING, "Write error on RTP socket");
-			call_destroy(stream->call);
+			call_destroy(sfd->call);
 			return;
 		}
 		if (ret == 1)
@@ -760,12 +745,10 @@ static void stream_readable(int fd, void *p, uintptr_t u) {
 	}
 
 out:
-	ca = stream->call ? obj_get(stream->call) : NULL;
+	ca = sfd->call ? : NULL;
 
 	if (ca && update)
-		redis_update(ca, stream->call->callmaster->conf.redis);
-	if (ca)
-		obj_put(ca);
+		redis_update(ca, sfd->call->callmaster->conf.redis);
 }
 
 
@@ -855,11 +838,11 @@ static void call_timer_iterator(void *key, void *val, void *ptr) {
 		ps = it->data;
 		mutex_lock(&ps->in_lock);
 
-		if (!ps->fd.localport)
+		if (!ps->sfd)
 			goto next;
-		if (hlp->ports[ps->fd.localport])
+		if (hlp->ports[ps->sfd->fd.localport])
 			abort();
-		hlp->ports[ps->fd.localport] = ps;
+		hlp->ports[ps->sfd->fd.localport] = ps;
 		obj_hold(ps);
 
 		if (good)
@@ -1092,14 +1075,14 @@ static void callmaster_timer(void *ptr) {
 		if (sink)
 			mutex_lock(&sink->out_lock);
 
-		if (sink && sink->crypto.out.signal.crypto_suite
-				&& ke->target.encrypt.last_index - sink->crypto.out.oper.last_index > 0x4000) {
-			sink->crypto.out.oper.last_index = ke->target.encrypt.last_index;
+		if (sink && sink->crypto.signal.crypto_suite
+				&& ke->target.encrypt.last_index - sink->crypto.oper.last_index > 0x4000) {
+			sink->crypto.oper.last_index = ke->target.encrypt.last_index;
 			update = 1;
 		}
-		if (ps->crypto.in.signal.crypto_suite
-				&& ke->target.decrypt.last_index - ps->crypto.in.oper.last_index > 0x4000) {
-			ps->crypto.in.oper.last_index = ke->target.decrypt.last_index;
+		if (ps->sfd->crypto.signal.crypto_suite
+				&& ke->target.decrypt.last_index - ps->sfd->crypto.oper.last_index > 0x4000) {
+			ps->sfd->crypto.oper.last_index = ke->target.decrypt.last_index;
 			update = 1;
 		}
 
@@ -1237,11 +1220,13 @@ static void release_port(struct udp_fd *r, struct callmaster *m) {
 	r->localport = 0;
 }
 
-static int get_consecutive_ports(struct udp_fd *array, int array_len, int wanted_start_port, struct call *c) {
+static int __get_consecutive_ports(struct udp_fd *array, int array_len, int wanted_start_port, struct call *c) {
 	int i, j, cycle = 0;
 	struct udp_fd *it;
 	u_int16_t port;
 	struct callmaster *m = c->callmaster;
+
+	memset(array, -1, sizeof(*array) * array_len);
 
 	if (wanted_start_port > 0)
 		port = wanted_start_port;
@@ -1329,154 +1314,207 @@ static struct call_media *__get_media(struct call_monologue *ml, GList **it, con
 	return med;
 }
 
-static void stream_free(void *p) {
-	struct packet_stream *s = p;
-	struct callmaster *m = s->call->callmaster;
+static void stream_fd_free(void *p) {
+	struct stream_fd *f = p;
+	struct callmaster *m = f->call->callmaster;
 
-	release_port(&s->fd, m);
+	release_port(&f->fd, m);
+	crypto_cleanup(&f->crypto);
 
-	obj_put(s->call);
+	obj_put(f->call);
 }
 
-static int __stream_params_match(struct packet_stream *ps, struct stream_params *sp) {
-	if (!ps->filled)
-		return 1;
-	if (ps->seqnum)
-		return 0;
-	if (memcmp(&sp->rtp_endpoint, &ps->advertised_endpoint, sizeof(sp->rtp_endpoint)))
-		return 0;
-	return 1;
-}
-
-static void __stream_params_confirm(struct call_media *A, struct call_media *B, struct stream_params *sp) {
-	struct packet_stream *endpoint;
-
-	if (!B->streams.length)
-		return;
-
-	endpoint = B->streams.head->data;
-
-	if (__stream_params_match(endpoint, sp))
-		return;
-
-	DBG("media params found mismatched for #%u, flushing streams", A->index);
-	g_queue_clear(&A->streams);
-	g_queue_clear(&B->streams);
-}
-
-static int __find_historic_streams(struct call_media *media, unsigned int num_ports, struct stream_params *sp) {
-	GQueue streams = G_QUEUE_INIT;
+static struct endpoint_map *__get_endpoint_map(struct call_media *media, unsigned int num_ports,
+		struct endpoint *ep)
+{
 	GList *l;
-	struct packet_stream *ps;
-	unsigned int seqnum;
-
-	DBG("looking for %u historic streams", num_ports);
-	/* XXX use hash table for this? */
-	/* XXX limit number of streams kept in history */
-	for (l = media->streams_history.head; l; l = l->next) {
-		ps = l->data;
-		if (__stream_params_match(ps, sp))
-			goto match;
-	}
-
-	DBG("no historic streams matched");
-	return -1;
-
-match:
-	g_queue_push_tail(&streams, ps);
-	seqnum = 1;
-	while (--num_ports > 0) {
-		l = l->next;
-		if (!l)
-			goto fail;
-		ps = l->data;
-		if (ps->seqnum != seqnum)
-			goto fail;
-		g_queue_push_tail(&streams, ps);
-	}
-
-	DBG("found usable historic streams");
-	g_queue_clear(&media->streams);
-	g_queue_move(&media->streams, &streams);
-	return 0;
-
-fail:
-	DBG("not enough historic streams present");
-	g_queue_clear(&streams);
-	return -1;
-}
-
-static int __num_media_streams(struct call_media *media, unsigned int num_ports) {
+	struct endpoint_map *em;
 	struct udp_fd fd_arr[16];
-	struct packet_stream *stream;
-	struct call *call = media->call;
 	unsigned int i;
+	struct stream_fd *sfd;
+	struct call *call = media->call;
 	struct poller_item pi;
 	struct poller *po = call->callmaster->poller;
 
-	DBG("media stream #%u wants %u ports, we have %u already",
-			media->index, num_ports, media->streams.length);
-	if (media->streams.length >= num_ports)
-		return 0;
-	if (num_ports > G_N_ELEMENTS(fd_arr))
-		return -1;
-	memset(fd_arr, -1, sizeof(fd_arr));
-	if (get_consecutive_ports(fd_arr, num_ports, 0, call))
-		return -1;
+	for (l = media->endpoint_maps; l; l = l->next) {
+		em = l->data;
+		if (em->wildcard && em->sfds.length >= num_ports) {
+			if (ep)
+				em->endpoint = *ep;
+			return em;
+		}
+		if (!ep) /* creating wildcard map */
+			break;
+		if (memcmp(&em->endpoint, ep, sizeof(*ep)))
+			continue;
+		if (em->sfds.length >= num_ports)
+			return em;
+		/* endpoint matches, but not enough ports. flush existing ports
+		 * and allocate a new set. */
+		g_queue_clear(&em->sfds);
+		goto alloc;
+	}
 
-	g_queue_clear(&media->streams);
+	em = g_slice_alloc0(sizeof(*em));
+	if (ep)
+		em->endpoint = *ep;
+	else
+		em->wildcard = 1;
+	g_queue_init(&em->sfds);
+	media->endpoint_maps = g_list_prepend(media->endpoint_maps, em);
+
+alloc:
+	if (num_ports > G_N_ELEMENTS(fd_arr))
+		return NULL;
+	if (__get_consecutive_ports(fd_arr, num_ports, 0, media->call))
+		return NULL;
 
 	for (i = 0; i < num_ports; i++) {
-		DBG("allocating new packet_stream for port #%u in stream #%u", i, media->index);
-		stream = obj_alloc0("packet_stream", sizeof(*stream), stream_free);
-		mutex_init(&stream->in_lock);
-		mutex_init(&stream->out_lock);
-		stream->seqnum = i;
-		stream->call = obj_get(call);
-		stream->media = media;
-		stream->fd = fd_arr[i];
-		stream->last_packet = poller_now;
-		g_queue_push_tail(&media->streams, stream);
-		g_queue_push_tail(&media->streams_history, stream);
-		call->streams = g_list_prepend(call->streams, stream);
+		sfd = obj_alloc0("stream_fd", sizeof(*sfd), stream_fd_free);
+		sfd->fd = fd_arr[i];
+		sfd->call = obj_get(call);
+		g_queue_push_tail(&em->sfds, sfd);
+		call->stream_fds = g_list_prepend(call->stream_fds, obj_get(sfd));
 
 		ZERO(pi);
-		pi.fd = stream->fd.fd;
-		pi.obj = &stream->obj;
-		pi.readable = stream_readable;
-		pi.closed = stream_closed;
+		pi.fd = sfd->fd.fd;
+		pi.obj = &sfd->obj;
+		pi.readable = stream_fd_readable;
+		pi.closed = stream_fd_closed;
 
 		poller_add_item(po, &pi);
 	}
 
+	return em;
+}
+
+static void __assign_stream_fds(struct call_media *media, GList *sfds) {
+	GList *l;
+	struct packet_stream *ps;
+
+	for (l = media->streams.head; l; l = l->next) {
+		assert(sfds != NULL);
+		ps = l->data;
+		ps->sfd = sfds->data;
+		sfds = sfds->next;
+	}
+}
+
+static int __wildcard_endpoint_map(struct call_media *media, unsigned int num_ports) {
+	struct endpoint_map *em;
+
+	em = __get_endpoint_map(media, num_ports, NULL);
+	if (!em)
+		return -1;
+
+	__assign_stream_fds(media, em->sfds.head);
+
 	return 0;
 }
 
-static struct packet_stream *__fill_stream(struct call_media *media, GList **iter, struct stream_params *sp) {
-	struct packet_stream *s;
+static int __num_media_streams(struct call_media *media, unsigned int num_ports) {
+	struct packet_stream *stream;
+	struct call *call = media->call;
+	int ret = 0;
 
-	if (!*iter)
-		*iter = media->streams.head;
-	else
-		*iter = (*iter)->next;
+	while (media->streams.length < num_ports) {
+		DBG("allocating new packet_stream");
+		stream = g_slice_alloc0(sizeof(*stream));
+		mutex_init(&stream->in_lock);
+		mutex_init(&stream->out_lock);
+		stream->call = call;
+		stream->media = media;
+		stream->last_packet = poller_now;
+		g_queue_push_tail(&media->streams, stream);
+		call->streams = g_list_prepend(call->streams, stream);
+		ret++;
+	}
 
-	s = (*iter)->data;
+	g_queue_truncate(&media->streams, num_ports);
 
-	s->filled = 1;
-	s->has_handler = 0;
-	s->crypto.in.signal = sp->crypto.signal;
+	return ret;
+}
 
-	return s;
+static void __init_streams(struct call_media *A, struct call_media *B, struct stream_params *sp) {
+	GList *la, *lb;
+	struct packet_stream *a, *b;
+	unsigned int port_off = 0;
+
+	la = A->streams.head;
+	lb = B->streams.head;
+
+	while (la) {
+		assert(lb != NULL);
+		a = la->data;
+		b = lb->data;
+
+		/* RTP */
+		a->rtp_sink = b;
+
+		if (sp) {
+			a->endpoint = sp->rtp_endpoint;
+			a->endpoint.port += port_off;
+			a->advertised_endpoint = a->endpoint;
+			a->filled = 1;
+			a->sfd->crypto.signal = sp->crypto.signal;
+		}
+
+		/* RTCP */
+		if (!B->rtcp_mux) {
+			lb = lb->next;
+			assert(lb != NULL);
+			b = lb->data;
+		}
+
+		if (!A->rtcp_mux) {
+			a->rtcp_sink = NULL;
+			a->rtcp = 0;
+			a->has_rtcp_in_next = 1;
+		}
+		else {
+			a->rtcp_sink = b;
+			a->rtcp = 1;
+			a->implicit_rtcp = 0;
+		}
+
+		/* if muxing, this is the fallback RTCP port */
+		la = la->next;
+		assert(la != NULL);
+		a = la->data;
+
+		a->rtp_sink = NULL;
+		a->rtcp_sink = b;
+		a->rtcp = 1;
+
+		if (sp) {
+			a->endpoint = sp->rtcp_endpoint;
+			if (!a->endpoint.port) {
+				a->endpoint = sp->rtp_endpoint;
+				a->endpoint.port++;
+				a->implicit_rtcp = 1;
+			}
+			else
+				a->implicit_rtcp = 0;
+			a->endpoint.port += port_off;
+			a->filled = 1;
+			a->sfd->crypto.signal = sp->crypto.signal;
+		}
+
+		la = la->next;
+		lb = lb->next;
+
+		port_off += 2;
+	}
 }
 
 /* called with call->master_lock held in W */
 static int monologue_offer_answer(struct call_monologue *monologue, GQueue *streams) {
 	struct stream_params *sp;
-	GList *media_iter, *ml_media, *other_ml_media, *iter, *other_iter;
+	GList *media_iter, *ml_media, *other_ml_media;
 	struct call_media *media, *other_media;
-	unsigned int i, num_ports;
+	unsigned int num_ports;
 	struct call_monologue *other_ml = monologue->active_dialogue;
-	struct packet_stream *stream, *other_stream = NULL;
+	struct endpoint_map *em;
 
 	monologue->call->last_signal = poller_now;
 
@@ -1523,89 +1561,31 @@ static int monologue_offer_answer(struct call_monologue *monologue, GQueue *stre
 				media->desired_family = AF_INET6;
 		}
 
-		/* in case of a re-invite, determine whether we need a new set of
-		 * ports, based on the media params received. if found mismatched,
-		 * new ports will be allocated for both sides. */
-		__stream_params_confirm(media, other_media, sp);
 
-		/* determine number of consecutive ports needed locally. we don't
-		 * multiplex on our side by default.
+		/* determine number of consecutive ports needed locally.
 		 * XXX only do *=2 for RTP streams? */
 		num_ports = sp->consecutive_ports;
 		num_ports *= 2;
 
-		/* if we need any ports at all, use old ones or allocate new ones */
-		if (!__find_historic_streams(media, num_ports, sp))
-			;
-		else if (__num_media_streams(media, num_ports))
-			goto error;
-		/* we may not need the same number of ports, but allocate them anyway,
-		 * just in case */
-		if (__num_media_streams(other_media, num_ports))
+		/* get that many ports for each side, and one packet stream for each port, then
+		 * assign the ports to the streams */
+		em = __get_endpoint_map(media, num_ports, &sp->rtp_endpoint);
+		if (!em)
 			goto error;
 
-		/* initialize and pair up each packet stream */
-		i = 0;
-		iter = media->streams.head;
-		other_iter = NULL;
+		__num_media_streams(media, num_ports);
+		__assign_stream_fds(media, em->sfds.head);
 
-		while (iter) {
-			stream = iter->data;
-			stream->has_handler = 0; /* XXX polymorph this */
-
-			if (!(i & 1) || media->rtcp_mux) {
-				/* RTP */
-				other_stream = __fill_stream(other_media, &other_iter, sp);
-
-				stream->rtp_sink = other_stream;
-				other_stream->rtp_sink = stream;
-
-				other_stream->endpoint = sp->rtp_endpoint;
-				other_stream->advertised_endpoint = other_stream->endpoint;
-
-				/* only possible in answer (?) - saved from offer */
-				if (media->rtcp_mux)
-					goto rtcp;
-
-				stream->has_rtcp_in_next = 1;
-
-				goto next;
-			}
-
-rtcp:
-			/* RTCP */
-			stream->rtcp = 1;
-
-			if (sp->rtcp_mux) {
-				assert(other_stream != NULL);
-
-				other_stream->rtcp = 1;
-
-				/* endpoint already set */
-			}
-			else if (sp->rtcp_endpoint.port) {
-				other_stream = __fill_stream(other_media, &other_iter, sp);
-
-				other_stream->endpoint = sp->rtcp_endpoint;
-				other_stream->advertised_endpoint = other_stream->endpoint;
-			}
-			else {
-				other_stream = __fill_stream(other_media, &other_iter, sp);
-
-				other_stream->implicit_rtcp = 1;
-				other_stream->endpoint = sp->rtp_endpoint;
-				other_stream->endpoint.port++;
-				other_stream->advertised_endpoint = other_stream->endpoint;
-			}
-
-			stream->rtcp_sink = other_stream;
-			other_stream->rtcp_sink = stream;
-			other_stream->rtcp = 1;
-
-next:
-			iter = iter->next;
-			i++;
+		if (__num_media_streams(other_media, num_ports)) {
+			/* new streams created on OTHER side. normally only happens in
+			 * initial offer. create a wildcard endpoint_map to be filled in
+			 * when the answer comes. */
+			if (__wildcard_endpoint_map(other_media, num_ports))
+				goto error;
 		}
+
+		__init_streams(media, other_media, NULL);
+		__init_streams(other_media, media, sp);
 	}
 
 	return 0;
@@ -1622,37 +1602,20 @@ static void unkernelize(struct packet_stream *p) {
 	if (p->no_kernel_support)
 		return;
 
-	kernel_del_stream(p->call->callmaster->conf.kernelfd, p->fd.localport);
+	kernel_del_stream(p->call->callmaster->conf.kernelfd, p->sfd->fd.localport);
 
 	p->kernelized = 0;
 }
 
-
-/* called with call->master_lock held in W */
-static void kill_packet_stream(struct packet_stream *ps) {
-	struct poller *p = ps->call->callmaster->poller;
-
-	unkernelize(ps);
-
-	poller_del_item(p, ps->fd.fd);
-
-	crypto_cleanup(&ps->crypto.in);
-	crypto_cleanup(&ps->crypto.out);
-
-	ps->rtp_sink = NULL;
-	ps->rtcp_sink = NULL;
-}
-
-/* called lock-free */
+/* called lock-free, but must hold a reference to the call */
 static void call_destroy(struct call *c) {
-	struct callmaster *m;
+	struct callmaster *m = c->callmaster;
 	struct packet_stream *ps;
+	struct stream_fd *sfd;
+	struct poller *p = m->poller;
+	GList *l;
 	int ret;
 
-	if (!c)
-		return;
-
-	m = c->callmaster;
 	rwlock_lock_w(&m->hashlock);
 	ret = g_hash_table_remove(m->callhash, &c->callid);
 	rwlock_unlock_w(&m->hashlock);
@@ -1666,10 +1629,10 @@ static void call_destroy(struct call *c) {
 
 	rwlock_lock_w(&c->master_lock);
 	/* at this point, no more packet streams can be added */
+
 	mylog(LOG_INFO, LOG_PREFIX_C "Final packet stats:", LOG_PARAMS_C(c));
-	while (c->streams) {
-		ps = c->streams->data;
-		c->streams = g_list_delete_link(c->streams, c->streams);
+	for (l = c->streams; l; l = l->next) {
+		ps = l->data;
 
 		/* XXX
 		mylog(LOG_INFO, LOG_PREFIX_C
@@ -1690,9 +1653,22 @@ static void call_destroy(struct call *c) {
 			s->peers[1].rtps[1].fd.localport, s->peers[1].rtps[1].stats.packets,
 			s->peers[1].rtps[1].stats.bytes, s->peers[1].rtps[1].stats.errors);
 		*/
-		kill_packet_stream(ps);
-		obj_put(ps);
+
+		unkernelize(ps);
+		ps->sfd = NULL;
+		crypto_cleanup(&ps->crypto);
+
+		ps->rtp_sink = NULL;
+		ps->rtcp_sink = NULL;
 	}
+
+	while (c->stream_fds) {
+		sfd = c->stream_fds->data;
+		c->stream_fds = g_list_delete_link(c->stream_fds, c->stream_fds);
+		poller_del_item(p, sfd->fd.fd);
+		obj_put(sfd);
+	}
+
 	rwlock_unlock_w(&c->master_lock);
 }
 
@@ -1848,7 +1824,7 @@ found:
 		if (format == SAF_TCP)
 			call_stream_address_gstring(o, ps, format);
 
-		g_string_append_printf(o, (format == 1) ? "%u " : " %u", ps->fd.localport);
+		g_string_append_printf(o, (format == 1) ? "%u " : " %u", ps->sfd->fd.localport);
 
 		if (format == SAF_UDP) {
 			af = call_stream_address_gstring(o, ps, format);
@@ -1867,6 +1843,8 @@ static void __call_free(void *p) {
 	struct call *c = p;
 	struct call_monologue *m;
 	struct call_media *md;
+	struct packet_stream *ps;
+	struct endpoint_map *em;
 	GList *it;
 
 	call_buffer_free(&c->buffer);
@@ -1882,7 +1860,12 @@ static void __call_free(void *p) {
 		for (it = m->medias.head; it; it = it->next) {
 			md = it->data;
 			g_queue_clear(&md->streams);
-			g_queue_clear(&md->streams_history);
+			while (md->endpoint_maps) {
+				em = md->endpoint_maps->data;
+				md->endpoint_maps = g_list_delete_link(md->endpoint_maps, md->endpoint_maps);
+				g_queue_clear(&em->sfds);
+				g_slice_free1(sizeof(*em), em);
+			}
 			g_slice_free1(sizeof(*md), md);
 		}
 		g_queue_clear(&m->medias);
@@ -1891,8 +1874,14 @@ static void __call_free(void *p) {
 	}
 
 	g_hash_table_destroy(c->tags);
-	//g_hash_table_destroy(c->branches);
-	assert(c->streams == NULL);
+
+	while (c->streams) {
+		ps = c->streams->data;
+		c->streams = g_list_delete_link(c->streams, c->streams);
+		g_slice_free1(sizeof(*ps), ps);
+	}
+
+	assert(c->stream_fds == NULL);
 }
 
 static struct call *call_create(const str *callid, struct callmaster *m) {
@@ -2008,6 +1997,8 @@ static void __monologue_unkernelize(struct call_monologue *monologue) {
 		for (m = media->streams.head; m; m = m->next) {
 			stream = m->data;
 			unkernelize(stream);
+			stream->confirmed = 0;
+			stream->has_handler = 0;
 		}
 	}
 }

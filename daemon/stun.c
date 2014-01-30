@@ -413,7 +413,7 @@ static inline int u_int16_t_arr_len(u_int16_t *arr) {
 
 
 #define SLF " on port %hu from %s"
-#define SLP ps->fd.localport, addr
+#define SLP ps->sfd->fd.localport, addr
 /* return values:
  * 0  = stun packet processed successfully
  * -1 = stun packet not processed, processing should continue as non-stun packet
@@ -453,7 +453,7 @@ int stun(str *b, struct packet_stream *ps, struct sockaddr_in6 *sin) {
 			goto ignore;
 		mylog(LOG_WARNING, "STUN packet contained unknown "
 				"\"comprehension required\" attribute(s)" SLF, SLP);
-		stun_error_attrs(cm, ps->fd.fd, sin, req, 420, "Unknown attribute",
+		stun_error_attrs(cm, ps->sfd->fd.fd, sin, req, 420, "Unknown attribute",
 				STUN_UNKNOWN_ATTRIBUTES, unknowns,
 				u_int16_t_arr_len(unknowns) * 2);
 		return 0;
@@ -479,17 +479,17 @@ int stun(str *b, struct packet_stream *ps, struct sockaddr_in6 *sin) {
 		goto unauth;
 
 	mylog(LOG_NOTICE, "Successful STUN binding request" SLF, SLP);
-	stun_binding_success(ps->fd.fd, req, &attrs, sin, ps->media);
+	stun_binding_success(ps->sfd->fd.fd, req, &attrs, sin, ps->media);
 
 	return attrs.use ? 1 : 0;
 
 bad_req:
 	mylog(LOG_INFO, "Received invalid STUN packet" SLF ": %s", SLP, err);
-	stun_error(cm, ps->fd.fd, sin, req, 400, "Bad request");
+	stun_error(cm, ps->sfd->fd.fd, sin, req, 400, "Bad request");
 	return 0;
 unauth:
 	mylog(LOG_INFO, "STUN authentication mismatch" SLF, SLP);
-	stun_error(cm, ps->fd.fd, sin, req, 401, "Unauthorized");
+	stun_error(cm, ps->sfd->fd.fd, sin, req, 401, "Unauthorized");
 	return 0;
 ignore:
 	mylog(LOG_INFO, "Not handling potential STUN packet" SLF ": %s", SLP, err);

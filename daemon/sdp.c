@@ -1057,7 +1057,7 @@ static int replace_media_port(struct sdp_chopper *chop, struct sdp_media *media,
 	if (copy_up_to(chop, port))
 		return -1;
 
-	chopper_append_printf(chop, "%hu", ps->fd.localport);
+	chopper_append_printf(chop, "%hu", ps->sfd->fd.localport);
 
 	if (skip_over(chop, port))
 		return -1;
@@ -1079,7 +1079,7 @@ static int replace_consecutive_port_count(struct sdp_chopper *chop, struct sdp_m
 		if (!j)
 			goto warn;
 		ps_n = j->data;
-		if (ps_n->fd.localport != ps->fd.localport + cons * 2) {
+		if (ps_n->sfd->fd.localport != ps->sfd->fd.localport + cons * 2) {
 warn:
 			mylog(LOG_WARN, "Failed to handle consecutive ports");
 			break;
@@ -1097,7 +1097,7 @@ static int insert_ice_address(struct sdp_chopper *chop, struct packet_stream *ps
 
 	call_stream_address(buf, ps, SAF_ICE, &len);
 	chopper_append_dup(chop, buf, len);
-	chopper_append_printf(chop, " %hu", ps->fd.localport);
+	chopper_append_printf(chop, " %hu", ps->sfd->fd.localport);
 
 	return 0;
 }
@@ -1108,7 +1108,7 @@ static int insert_ice_address_alt(struct sdp_chopper *chop, struct packet_stream
 
 	call_stream_address_alt(buf, ps, SAF_ICE, &len);
 	chopper_append_dup(chop, buf, len);
-	chopper_append_printf(chop, " %hu", ps->fd.localport);
+	chopper_append_printf(chop, " %hu", ps->sfd->fd.localport);
 
 	return 0;
 }
@@ -1383,14 +1383,14 @@ static int generate_crypto(struct sdp_media *media, struct sdp_ng_flags *flags,
 	if (attr_get_by_id(&media->attributes, ATTR_CRYPTO)) {
 		/* SRTP <> SRTP case, copy from other stream
 		 * and leave SDP untouched */
-		src = &rtp->rtp_sink->crypto.in;
+		src = &rtp->rtp_sink->sfd->crypto;
 
-		c = &rtp->crypto.out;
+		c = &rtp->crypto;
 		if (!c->signal.crypto_suite)
 			*c = *src;
 
 		if (rtcp) {
-			c = &rtcp->crypto.out;
+			c = &rtcp->crypto;
 			if (!c->signal.crypto_suite)
 				*c = *src;
 		}
@@ -1398,9 +1398,9 @@ static int generate_crypto(struct sdp_media *media, struct sdp_ng_flags *flags,
 		return 0;
 	}
 
-	c = &rtp->crypto.out;
+	c = &rtp->crypto;
 	if (!c->signal.crypto_suite) {
-		c->signal.crypto_suite = rtp->crypto.in.signal.crypto_suite;
+		c->signal.crypto_suite = rtp->sfd->crypto.signal.crypto_suite;
 		if (!c->signal.crypto_suite)
 			c->signal.crypto_suite = &crypto_suites[0];
 		random_string((unsigned char *) c->signal.master_key,
@@ -1408,7 +1408,7 @@ static int generate_crypto(struct sdp_media *media, struct sdp_ng_flags *flags,
 		random_string((unsigned char *) c->signal.master_salt,
 				c->signal.crypto_suite->master_salt_len);
 		/* mki = mki_len = 0 */
-		c->signal.tag = rtp->crypto.in.signal.tag;
+		c->signal.tag = rtp->sfd->crypto.signal.tag;
 	}
 
 	assert(sizeof(b64_buf) >= (((c->signal.crypto_suite->master_key_len
@@ -1425,7 +1425,7 @@ static int generate_crypto(struct sdp_media *media, struct sdp_ng_flags *flags,
 
 	if (rtcp) {
 		src = c;
-		c = &rtcp->crypto.out;
+		c = &rtcp->crypto;
 
 		c->signal.crypto_suite = src->signal.crypto_suite;
 		c->signal.tag = src->signal.tag;
@@ -1559,12 +1559,12 @@ int sdp_replace(struct sdp_chopper *chop, GQueue *sessions, struct call_monologu
 
 			if (call_media->rtcp_mux) {
 				chopper_append_c(chop, "a=rtcp:");
-				chopper_append_printf(chop, "%hu", ps->fd.localport);
+				chopper_append_printf(chop, "%hu", ps->sfd->fd.localport);
 				chopper_append_c(chop, "\r\na=rtcp-mux\r\n");
 			}
 			else if (ps_rtcp) {
 				chopper_append_c(chop, "a=rtcp:");
-				chopper_append_printf(chop, "%hu", ps_rtcp->fd.localport);
+				chopper_append_printf(chop, "%hu", ps_rtcp->sfd->fd.localport);
 				chopper_append_c(chop, "\r\n");
 			}
 

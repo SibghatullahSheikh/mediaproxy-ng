@@ -49,6 +49,7 @@ struct obj {
 
 #else
 
+/* XXX use typed arguments */
 #define obj_alloc(t,a,b)	__obj_alloc(a,b)
 #define obj_alloc0(t,a,b)	__obj_alloc0(a,b)
 #define obj_hold(a)		__obj_hold(a)

@@ -78,6 +78,10 @@ static inline void g_queue_move(GQueue *dst, GQueue *src) {
 	while ((l = g_queue_pop_head_link(src)))
 		g_queue_push_tail_link(dst, l);
 }
+static inline void g_queue_truncate(GQueue *q, unsigned int len) {
+	while (q->length > len)
+		g_queue_pop_tail(q);
+}
 
 
 static inline void strmove(char **d, char **s) {
