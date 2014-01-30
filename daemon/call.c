@@ -55,7 +55,7 @@ typedef int (*rewrite_func)(str *, struct packet_stream *);
 /* also serves as array index for callstream->peers[] */
 struct iterator_helper {
 	GSList			*del;
-	struct packet_stream	*ports[0x10000];
+	struct stream_fd	*ports[0x10000];
 };
 struct xmlrpc_helper {
 	GStringChunk		*c;
@@ -826,6 +826,7 @@ static void call_timer_iterator(void *key, void *val, void *ptr) {
 	unsigned int check;
 	int good = 0;
 	struct packet_stream *ps;
+	struct stream_fd *sfd;
 
 	rwlock_lock_r(&c->master_lock);
 
@@ -838,12 +839,13 @@ static void call_timer_iterator(void *key, void *val, void *ptr) {
 		ps = it->data;
 		mutex_lock(&ps->in_lock);
 
-		if (!ps->sfd)
+		sfd = ps->sfd;
+		if (!sfd)
 			goto next;
-		if (hlp->ports[ps->sfd->fd.localport])
-			abort();
-		hlp->ports[ps->sfd->fd.localport] = ps;
-		obj_hold(ps);
+		if (hlp->ports[sfd->fd.localport])
+			goto next;
+		hlp->ports[sfd->fd.localport] = sfd;
+		obj_hold(sfd);
 
 		if (good)
 			goto next;
@@ -1027,6 +1029,7 @@ static void callmaster_timer(void *ptr) {
 	u_int64_t d;
 	struct stats tmpstats;
 	int j, update;
+	struct stream_fd *sfd;
 
 	ZERO(hlp);
 
@@ -1046,7 +1049,10 @@ static void callmaster_timer(void *ptr) {
 	while (i) {
 		ke = i->data;
 
-		ps = hlp.ports[ke->target.target_port];
+		sfd = hlp.ports[ke->target.target_port];
+		if (!sfd)
+			goto next;
+		ps = sfd->stream;
 		if (!ps)
 			goto next;
 
@@ -2467,7 +2473,7 @@ static void call_status_iterator(struct call *c, struct control_stream *s) {
 
 static void callmaster_get_all_calls_interator(void *key, void *val, void *ptr) {
 	GQueue *q = ptr;
-	g_queue_push_tail(q, obj_get(val));
+	g_queue_push_tail(q, obj_get_o(val));
 }
 
 void calls_status_tcp(struct callmaster *m, struct control_stream *s) {

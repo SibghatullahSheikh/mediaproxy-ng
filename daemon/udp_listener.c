@@ -58,7 +58,7 @@ int udp_listener_init(struct udp_listener *u, struct poller *p, struct in6_addr 
 
 	cb = obj_alloc("udp_listener_callback", sizeof(*cb), NULL);
 	cb->func = func;
-	cb->p = obj_get(obj);
+	cb->p = obj_get_o(obj);
 
 	u->fd = socket(AF_INET6, SOCK_DGRAM, 0);
 	if (u->fd == -1)
@@ -88,7 +88,7 @@ int udp_listener_init(struct udp_listener *u, struct poller *p, struct in6_addr 
 fail:
 	if (u->fd != -1)
 		close(u->fd);
-	obj_put(obj);
-	obj_put(&cb->obj);
+	obj_put_o(obj);
+	obj_put(cb);
 	return -1;
 }
