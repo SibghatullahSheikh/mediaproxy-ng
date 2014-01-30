@@ -1385,8 +1385,8 @@ alloc:
 		sfd = obj_alloc0("stream_fd", sizeof(*sfd), stream_fd_free);
 		sfd->fd = fd_arr[i];
 		sfd->call = obj_get(call);
-		g_queue_push_tail(&em->sfds, sfd);
-		call->stream_fds = g_list_prepend(call->stream_fds, obj_get(sfd));
+		g_queue_push_tail(&em->sfds, sfd); /* not referenced */
+		call->stream_fds = g_list_prepend(call->stream_fds, sfd); /* hand over ref */
 
 		ZERO(pi);
 		pi.fd = sfd->fd.fd;
