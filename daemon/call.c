@@ -1403,11 +1403,14 @@ alloc:
 static void __assign_stream_fds(struct call_media *media, GList *sfds) {
 	GList *l;
 	struct packet_stream *ps;
+	struct stream_fd *sfd;
 
 	for (l = media->streams.head; l; l = l->next) {
 		assert(sfds != NULL);
 		ps = l->data;
-		ps->sfd = sfds->data;
+		sfd = sfds->data;
+		ps->sfd = sfd;
+		sfd->stream = ps;
 		sfds = sfds->next;
 	}
 }
