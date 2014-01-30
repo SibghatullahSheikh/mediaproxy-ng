@@ -1345,8 +1345,11 @@ static struct endpoint_map *__get_endpoint_map(struct call_media *media, unsigne
 	for (l = media->endpoint_maps; l; l = l->next) {
 		em = l->data;
 		if (em->wildcard && em->sfds.length >= num_ports) {
-			if (ep)
+			DBG("found a wildcard endpoint map%s", ep ? " and filling it in" : "");
+			if (ep) {
 				em->endpoint = *ep;
+				em->wildcard = 0;
+			}
 			return em;
 		}
 		if (!ep) /* creating wildcard map */
