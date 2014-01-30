@@ -1357,10 +1357,12 @@ static struct endpoint_map *__get_endpoint_map(struct call_media *media, unsigne
 			return em;
 		/* endpoint matches, but not enough ports. flush existing ports
 		 * and allocate a new set. */
+		DBG("endpoint matches, doesn't have enough ports");
 		g_queue_clear(&em->sfds);
 		goto alloc;
 	}
 
+	DBG("allocating new %sendpoint map", ep ? "" : "wildcard ");
 	em = g_slice_alloc0(sizeof(*em));
 	if (ep)
 		em->endpoint = *ep;
@@ -1375,6 +1377,7 @@ alloc:
 	if (__get_consecutive_ports(fd_arr, num_ports, 0, media->call))
 		return NULL;
 
+	DBG("allocating stream_fds for %u ports", num_ports);
 	for (i = 0; i < num_ports; i++) {
 		sfd = obj_alloc0("stream_fd", sizeof(*sfd), stream_fd_free);
 		sfd->fd = fd_arr[i];
@@ -1423,8 +1426,8 @@ static int __num_media_streams(struct call_media *media, unsigned int num_ports)
 	struct call *call = media->call;
 	int ret = 0;
 
+	DBG("allocating %i new packet_streams", num_ports - media->streams.length);
 	while (media->streams.length < num_ports) {
-		DBG("allocating new packet_stream");
 		stream = g_slice_alloc0(sizeof(*stream));
 		mutex_init(&stream->in_lock);
 		mutex_init(&stream->out_lock);
