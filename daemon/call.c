@@ -2025,8 +2025,13 @@ static void __monologue_unkernelize(struct call_monologue *monologue) {
 
 /* must be called with call->master_lock held in W */
 static void __monologue_destroy(struct call_monologue *monologue) {
+	struct call *call;
 	struct call_monologue *dialogue;
 	GList *l;
+
+	call = monologue->call;
+
+	g_hash_table_remove(call->tags, &monologue->tag);
 
 	l = g_hash_table_get_values(monologue->other_tags);
 
@@ -2034,6 +2039,8 @@ static void __monologue_destroy(struct call_monologue *monologue) {
 		dialogue = l->data;
 		l = g_list_delete_link(l, l);
 		g_hash_table_remove(dialogue->other_tags, &monologue->tag);
+		if (!g_hash_table_size(dialogue->other_tags))
+			__monologue_destroy(dialogue);
 	}
 }
 
@@ -2314,7 +2321,10 @@ static int call_delete_branch(struct callmaster *m, const str *callid, const str
 */
 
 	__monologue_destroy(ml);
-	goto success_unlock; /* XXX del full call */
+	if (g_hash_table_size(c->tags)) {
+		mylog(LOG_INFO, LOG_PREFIX_CI "Call branch deleted (other branches still active)", LOG_PARAMS_CI(c));
+		goto success_unlock;
+	}
 
 del_all:
 	rwlock_unlock_w(&c->master_lock);
