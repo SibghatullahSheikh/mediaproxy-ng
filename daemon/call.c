@@ -1469,6 +1469,8 @@ static void __init_streams(struct call_media *A, struct call_media *B, struct st
 		if (sp) {
 			a->endpoint = sp->rtp_endpoint;
 			a->endpoint.port += port_off;
+			if (memcmp(&a->advertised_endpoint, &a->endpoint, sizeof(a->endpoint)))
+				crypto_cleanup(&a->crypto);
 			a->advertised_endpoint = a->endpoint;
 			a->filled = 1;
 			a->sfd->crypto.signal = sp->crypto.signal;
@@ -1510,8 +1512,10 @@ static void __init_streams(struct call_media *A, struct call_media *B, struct st
 			}
 			else
 				a->implicit_rtcp = 0;
-			a->advertised_endpoint = a->endpoint;
 			a->endpoint.port += port_off;
+			if (memcmp(&a->advertised_endpoint, &a->endpoint, sizeof(a->endpoint)))
+				crypto_cleanup(&a->crypto);
+			a->advertised_endpoint = a->endpoint;
 			a->filled = 1;
 			a->sfd->crypto.signal = sp->crypto.signal;
 		}

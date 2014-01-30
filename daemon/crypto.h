@@ -116,6 +116,7 @@ static inline void crypto_cleanup(struct crypto_context *c) {
 		return;
 	if (c->signal.crypto_suite->session_key_cleanup)
 		c->signal.crypto_suite->session_key_cleanup(c);
+	c->signal.have_session_key = 0;
 }
 
 
