@@ -759,15 +759,7 @@ void sdp_free(GQueue *sessions) {
 static int fill_stream_address(struct stream_input *si, struct sdp_media *media, struct sdp_ng_flags *flags) {
 	struct sdp_session *session = media->session;
 
-	if (flags->media_address.s) {
-		if (is_addr_unspecified(&flags->parsed_media_address)) {
-			if (__parse_address(&flags->parsed_media_address, NULL, NULL,
-						&flags->media_address))
-				return -1;
-		}
-		si->stream.ip46 = flags->parsed_media_address;
-	}
-	else if (!flags->trust_address) {
+	if (!flags->trust_address) {
 		if (is_addr_unspecified(&flags->parsed_received_from)) {
 			if (__parse_address(&flags->parsed_received_from, NULL, &flags->received_from_family,
 						&flags->received_from_address))
@@ -1110,7 +1102,7 @@ static int insert_ice_address_alt(struct sdp_chopper *chop, struct packet_stream
 }
 
 static int replace_network_address(struct sdp_chopper *chop, struct network_address *address,
-		struct packet_stream *ps)
+		struct packet_stream *ps, struct sdp_ng_flags *flags)
 {
 	char buf[64];
 	int len;
@@ -1121,7 +1113,17 @@ static int replace_network_address(struct sdp_chopper *chop, struct network_addr
 	if (copy_up_to(chop, &address->address_type))
 		return -1;
 
-	call_stream_address(buf, ps, SAF_NG, &len);
+	if (!is_addr_unspecified(&flags->parsed_media_address)) {
+		if (IN6_IS_ADDR_V4MAPPED(&flags->parsed_media_address))
+			len = sprintf(buf, "IP4 " IPF, IPP(flags->parsed_media_address.s6_addr32[3]));
+		else {
+			memcpy(buf, "IP6 ", 4);
+			inet_ntop(AF_INET6, &flags->parsed_media_address, buf + 4, sizeof(buf)-4);
+			len = strlen(buf);
+		}
+	}
+	else
+		call_stream_address(buf, ps, SAF_NG, &len);
 	chopper_append_dup(chop, buf, len);
 
 	if (skip_over(chop, &address->address))
@@ -1394,6 +1396,13 @@ int sdp_replace(struct sdp_chopper *chop, GQueue *sessions, struct call_monologu
 	m = monologue->medias.head;
 	do_ice = (flags->ice_force || (!has_ice(sessions) && !flags->ice_remove)) ? 1 : 0;
 	call = monologue->call;
+	if (flags->media_address.s) {
+		if (is_addr_unspecified(&flags->parsed_media_address)) {
+			if (__parse_address(&flags->parsed_media_address, NULL, NULL,
+						&flags->media_address))
+				return -1;
+		}
+	}
 
 	for (l = sessions->head; l; l = l->next) {
 		session = l->data;
@@ -1421,11 +1430,11 @@ int sdp_replace(struct sdp_chopper *chop, GQueue *sessions, struct call_monologu
 		}
 
 		if (session->origin.parsed && flags->replace_origin) {
-			if (replace_network_address(chop, &session->origin.address, ps))
+			if (replace_network_address(chop, &session->origin.address, ps, flags))
 				goto error;
 		}
 		if (session->connection.parsed && sess_conn) {
-			if (replace_network_address(chop, &session->connection.address, ps))
+			if (replace_network_address(chop, &session->connection.address, ps, flags))
 				goto error;
 		}
 
@@ -1459,7 +1468,7 @@ int sdp_replace(struct sdp_chopper *chop, GQueue *sessions, struct call_monologu
 				goto error;
 
 			if (sdp_media->connection.parsed) {
-				if (replace_network_address(chop, &sdp_media->connection.address, ps))
+				if (replace_network_address(chop, &sdp_media->connection.address, ps, flags))
 					goto error;
 			}
 
