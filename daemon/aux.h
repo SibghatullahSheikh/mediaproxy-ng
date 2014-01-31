@@ -15,6 +15,7 @@
 #include <pthread.h>
 #include <sys/resource.h>
 #include <stdio.h>
+#include <stdlib.h>
 
 #include "log.h"
 
@@ -208,6 +209,12 @@ static inline int strmemcmp(const void *mem, int len, const char *str) {
 	if (l > len)
 		return 1;
 	return memcmp(mem, str, len);
+}
+
+/* XXX replace with better source of randomness */
+static inline void random_string(unsigned char *buf, int len) {
+	while (len--)
+		*buf++ = random() % 0x100;
 }
 
 

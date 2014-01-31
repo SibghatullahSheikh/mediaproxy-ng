@@ -405,19 +405,19 @@ static int __k_null(struct mediaproxy_srtp *s, struct packet_stream *stream) {
 	return 0;
 }
 static int __k_srtp_crypt(struct mediaproxy_srtp *s, struct crypto_context *c) {
-	if (!c->signal.crypto_suite)
+	if (!c->params.crypto_suite)
 		return -1;
 
 	*s = (struct mediaproxy_srtp) {
-		.cipher		= c->signal.crypto_suite->kernel_cipher,
-		.hmac		= c->signal.crypto_suite->kernel_hmac,
-		.mki		= c->signal.mki,
-		.mki_len	= c->signal.mki_len,
-		.last_index	= c->oper.last_index,
-		.auth_tag_len	= c->signal.crypto_suite->srtp_auth_tag,
+		.cipher		= c->params.crypto_suite->kernel_cipher,
+		.hmac		= c->params.crypto_suite->kernel_hmac,
+		.mki		= c->params.mki,
+		.mki_len	= c->params.mki_len,
+		.last_index	= c->last_index,
+		.auth_tag_len	= c->params.crypto_suite->srtp_auth_tag,
 	};
-	memcpy(s->master_key, c->signal.master_key, c->signal.crypto_suite->master_key_len);
-	memcpy(s->master_salt, c->signal.master_salt, c->signal.crypto_suite->master_salt_len);
+	memcpy(s->master_key, c->params.master_key, c->params.crypto_suite->master_key_len);
+	memcpy(s->master_salt, c->params.master_salt, c->params.crypto_suite->master_salt_len);
 	return 0;
 }
 static int __k_srtp_encrypt(struct mediaproxy_srtp *s, struct packet_stream *stream) {
@@ -1081,14 +1081,14 @@ static void callmaster_timer(void *ptr) {
 		if (sink)
 			mutex_lock(&sink->out_lock);
 
-		if (sink && sink->crypto.signal.crypto_suite
-				&& ke->target.encrypt.last_index - sink->crypto.oper.last_index > 0x4000) {
-			sink->crypto.oper.last_index = ke->target.encrypt.last_index;
+		if (sink && sink->crypto.params.crypto_suite
+				&& ke->target.encrypt.last_index - sink->crypto.last_index > 0x4000) {
+			sink->crypto.last_index = ke->target.encrypt.last_index;
 			update = 1;
 		}
-		if (ps->sfd->crypto.signal.crypto_suite
-				&& ke->target.decrypt.last_index - ps->sfd->crypto.oper.last_index > 0x4000) {
-			ps->sfd->crypto.oper.last_index = ke->target.decrypt.last_index;
+		if (ps->sfd->crypto.params.crypto_suite
+				&& ke->target.decrypt.last_index - ps->sfd->crypto.last_index > 0x4000) {
+			ps->sfd->crypto.last_index = ke->target.decrypt.last_index;
 			update = 1;
 		}
 
@@ -1331,7 +1331,7 @@ static void stream_fd_free(void *p) {
 }
 
 static struct endpoint_map *__get_endpoint_map(struct call_media *media, unsigned int num_ports,
-		struct endpoint *ep)
+		const struct endpoint *ep)
 {
 	GList *l;
 	struct endpoint_map *em;
@@ -1450,7 +1450,26 @@ static int __num_media_streams(struct call_media *media, unsigned int num_ports)
 	return ret;
 }
 
-static void __init_streams(struct call_media *A, struct call_media *B, struct stream_params *sp) {
+static void __fill_stream(struct packet_stream *ps, const struct endpoint *ep, unsigned int port_off) {
+	ps->endpoint = *ep;
+	ps->endpoint.port += port_off;
+	/* we SHOULD remember the crypto contexts of previously used endpoints,
+	 * but instead we reset it every time it changes, which is incompatible
+	 * with what we're doing on our side (remembers in the stream_fd) */
+	if (memcmp(&ps->advertised_endpoint, &ps->endpoint, sizeof(ps->endpoint)))
+		crypto_reset(&ps->crypto);
+	ps->advertised_endpoint = ps->endpoint;
+	ps->filled = 1;
+}
+
+static void __init_stream(struct packet_stream *ps) {
+	struct call_media *media = ps->media;
+
+	crypto_init(&ps->sfd->crypto, &media->sdes_in.params);
+	crypto_init(&ps->crypto, &media->sdes_out.params);
+}
+
+static void __init_streams(struct call_media *A, struct call_media *B, const struct stream_params *sp) {
 	GList *la, *lb;
 	struct packet_stream *a, *b;
 	unsigned int port_off = 0;
@@ -1466,15 +1485,9 @@ static void __init_streams(struct call_media *A, struct call_media *B, struct st
 		/* RTP */
 		a->rtp_sink = b;
 
-		if (sp) {
-			a->endpoint = sp->rtp_endpoint;
-			a->endpoint.port += port_off;
-			if (memcmp(&a->advertised_endpoint, &a->endpoint, sizeof(a->endpoint)))
-				crypto_cleanup(&a->crypto);
-			a->advertised_endpoint = a->endpoint;
-			a->filled = 1;
-			a->sfd->crypto.signal = sp->crypto.signal;
-		}
+		if (sp)
+			__fill_stream(a, &sp->rtp_endpoint, port_off);
+		__init_stream(a);
 
 		/* RTCP */
 		if (!B->rtcp_mux) {
@@ -1504,21 +1517,16 @@ static void __init_streams(struct call_media *A, struct call_media *B, struct st
 		a->rtcp = 1;
 
 		if (sp) {
-			a->endpoint = sp->rtcp_endpoint;
-			if (!a->endpoint.port) {
-				a->endpoint = sp->rtp_endpoint;
-				a->endpoint.port++;
+			if (sp->rtcp_endpoint.port) {
+				__fill_stream(a, &sp->rtcp_endpoint, port_off);
+				a->implicit_rtcp = 0;
+			}
+			else {
+				__fill_stream(a, &sp->rtp_endpoint, port_off + 1);
 				a->implicit_rtcp = 1;
 			}
-			else
-				a->implicit_rtcp = 0;
-			a->endpoint.port += port_off;
-			if (memcmp(&a->advertised_endpoint, &a->endpoint, sizeof(a->endpoint)))
-				crypto_cleanup(&a->crypto);
-			a->advertised_endpoint = a->endpoint;
-			a->filled = 1;
-			a->sfd->crypto.signal = sp->crypto.signal;
 		}
+		__init_stream(a);
 
 		la = la->next;
 		lb = lb->next;
@@ -1527,8 +1535,42 @@ static void __init_streams(struct call_media *A, struct call_media *B, struct st
 	}
 }
 
+/* generates SDES parametes for outgoing SDP, which is our media "out" direction */
+static void __generate_crypto(struct call_media *this, struct call_media *other) {
+	struct crypto_params *cp = &this->sdes_out.params,
+			     *cp_in = &this->sdes_in.params;
+
+	if (this->protocol != PROTO_RTP_SAVP && this->protocol != PROTO_RTP_SAVPF) {
+		cp->crypto_suite = NULL;
+		return;
+	}
+
+	/* for answer case, otherwise defaults to zero */
+	this->sdes_out.tag = this->sdes_in.tag;
+
+	if (other->sdes_in.params.crypto_suite) {
+		/* SRTP <> SRTP case, copy from other stream */
+		*cp = other->sdes_in.params;
+		return;
+	}
+
+	if (cp->crypto_suite)
+		return;
+
+	cp->crypto_suite = cp_in->crypto_suite;
+	if (!cp->crypto_suite)
+		cp->crypto_suite = &crypto_suites[0];
+	random_string((unsigned char *) cp->master_key,
+			cp->crypto_suite->master_key_len);
+	random_string((unsigned char *) cp->master_salt,
+			cp->crypto_suite->master_salt_len);
+	/* mki = mki_len = 0 */
+}
+
 /* called with call->master_lock held in W */
-static int monologue_offer_answer(struct call_monologue *monologue, GQueue *streams) {
+static int monologue_offer_answer(struct call_monologue *monologue, GQueue *streams,
+		struct sdp_ng_flags *flags)
+{
 	struct stream_params *sp;
 	GList *media_iter, *ml_media, *other_ml_media;
 	struct call_media *media, *other_media;
@@ -1563,10 +1605,19 @@ static int monologue_offer_answer(struct call_monologue *monologue, GQueue *stre
 			if (other_media->protocol == PROTO_UNKNOWN)
 				other_media->protocol = PROTO_RTP_AVP;
 		}
-		if (media->protocol == PROTO_UNKNOWN)
-			media->protocol = other_media->protocol;
+		if (media->protocol == PROTO_UNKNOWN) {
+			if (flags)
+				media->protocol = flags->transport_protocol;
+			if (media->protocol == PROTO_UNKNOWN)
+				media->protocol = other_media->protocol;
+		}
 
+		/* copy parameters advertised by the sender of this message */
 		other_media->rtcp_mux = sp->rtcp_mux;
+		other_media->sdes_in.params = sp->crypto;
+		other_media->sdes_in.tag = sp->sdes_tag;
+
+		__generate_crypto(media, other_media);
 
 		/* deduct address family from stream parameters received */
 		if (!other_media->desired_family) {
@@ -2189,7 +2240,7 @@ static str *call_update_lookup_udp(char **out, struct callmaster *m, enum call_o
 
 	g_queue_push_tail(&q, &sp);
 	/* XXX return value */
-	monologue_offer_answer(monologue, &q);
+	monologue_offer_answer(monologue, &q, NULL);
 	g_queue_clear(&q);
 
 	ret = streams_print(&monologue->medias, sp.index, sp.index, out[RE_UDP_COOKIE], SAF_UDP);
@@ -2249,7 +2300,7 @@ static str *call_request_lookup_tcp(char **out, struct callmaster *m, enum call_
 
 	monologue = call_get_mono_dialogue(c, &fromtag, &totag);
 	/* XXX return value */
-	monologue_offer_answer(monologue, &s);
+	monologue_offer_answer(monologue, &s, NULL);
 
 	ret = streams_print(&monologue->medias, 1, s.length, NULL, SAF_TCP);
 	rwlock_unlock_w(&c->master_lock);
@@ -2678,7 +2729,7 @@ static const char *call_offer_answer_ng(bencode_item_t *input, struct callmaster
 	chopper = sdp_chopper_new(&sdp);
 	bencode_buffer_destroy_add(output->buffer, (free_func_t) sdp_chopper_destroy, chopper);
 	/* XXX return value */
-	monologue_offer_answer(monologue, &streams);
+	monologue_offer_answer(monologue, &streams, &flags);
 	ret = sdp_replace(chopper, &parsed, monologue, &flags);
 
 	rwlock_unlock_w(&call->master_lock);

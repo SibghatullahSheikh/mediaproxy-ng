@@ -93,7 +93,8 @@ struct stream_params {
 	struct endpoint		rtcp_endpoint;
 	unsigned int		consecutive_ports;
 	enum transport_protocol	protocol;
-	struct crypto_context	crypto;
+	struct crypto_params	crypto;
+	unsigned int		sdes_tag;
 	enum stream_direction	direction[2];
 
 	int			no_rtcp:1;
@@ -162,6 +163,11 @@ struct call_media {
 
 	str			ice_ufrag;
 	str			ice_pwd;
+	struct {
+		struct crypto_params	params;
+		unsigned int		tag;
+	}			sdes_in,
+				sdes_out;
 
 	GQueue			streams; /* normally RTP + RTCP */
 	GList			*endpoint_maps; /* singly linked list? XXX */

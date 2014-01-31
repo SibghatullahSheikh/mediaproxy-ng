@@ -46,35 +46,29 @@ struct crypto_suite {
 	session_key_cleanup_func session_key_cleanup;
 };
 
-struct crypto_context {
-	struct {
-		const struct crypto_suite *crypto_suite;
-		/* we only support one master key for now */
-		char master_key[16];
-		char master_salt[14];
-		u_int64_t mki;
-		unsigned int mki_len;
-		unsigned int tag;
-
-		char session_key[16]; /* k_e */
-		char session_salt[14]; /* k_s */
-		char session_auth_key[20];
-
-		int have_session_key:1;
-	} signal;
-
-	struct {
-		u_int64_t last_index;
-		/* XXX replay list */
-		/* <from, to>? */
-
-		void *session_key_ctx[2];
-	} oper;
+struct crypto_params {
+	const struct crypto_suite *crypto_suite;
+	/* we only support one master key for now */
+	char master_key[16];
+	char master_salt[14];
+	u_int64_t mki;
+	unsigned int mki_len;
 };
 
-struct crypto_context_pair {
-	struct crypto_context in,
-			      out;
+struct crypto_context {
+	struct crypto_params params;
+
+	char session_key[16]; /* k_e */
+	char session_salt[14]; /* k_s */
+	char session_auth_key[20];
+
+	u_int64_t last_index;
+	/* XXX replay list */
+	/* <from, to>? */
+
+	void *session_key_ctx[2];
+
+	int have_session_key:1;
 };
 
 
@@ -91,32 +85,40 @@ int crypto_gen_session_key(struct crypto_context *, str *, unsigned char, int);
 static inline int crypto_encrypt_rtp(struct crypto_context *c, struct rtp_header *rtp,
 		str *payload, u_int64_t index)
 {
-	return c->signal.crypto_suite->encrypt_rtp(c, rtp, payload, index);
+	return c->params.crypto_suite->encrypt_rtp(c, rtp, payload, index);
 }
 static inline int crypto_decrypt_rtp(struct crypto_context *c, struct rtp_header *rtp,
 		str *payload, u_int64_t index)
 {
-	return c->signal.crypto_suite->decrypt_rtp(c, rtp, payload, index);
+	return c->params.crypto_suite->decrypt_rtp(c, rtp, payload, index);
 }
 static inline int crypto_encrypt_rtcp(struct crypto_context *c, struct rtcp_packet *rtcp,
 		str *payload, u_int64_t index)
 {
-	return c->signal.crypto_suite->encrypt_rtcp(c, rtcp, payload, index);
+	return c->params.crypto_suite->encrypt_rtcp(c, rtcp, payload, index);
 }
 static inline int crypto_decrypt_rtcp(struct crypto_context *c, struct rtcp_packet *rtcp,
 		str *payload, u_int64_t index)
 {
-	return c->signal.crypto_suite->decrypt_rtcp(c, rtcp, payload, index);
+	return c->params.crypto_suite->decrypt_rtcp(c, rtcp, payload, index);
 }
 static inline int crypto_init_session_key(struct crypto_context *c) {
-	return c->signal.crypto_suite->session_key_init(c);
+	return c->params.crypto_suite->session_key_init(c);
 }
 static inline void crypto_cleanup(struct crypto_context *c) {
-	if (!c->signal.crypto_suite)
+	if (!c->params.crypto_suite)
 		return;
-	if (c->signal.crypto_suite->session_key_cleanup)
-		c->signal.crypto_suite->session_key_cleanup(c);
-	c->signal.have_session_key = 0;
+	if (c->params.crypto_suite->session_key_cleanup)
+		c->params.crypto_suite->session_key_cleanup(c);
+	c->have_session_key = 0;
+}
+static inline void crypto_reset(struct crypto_context *c) {
+	crypto_cleanup(c);
+	c->last_index = 0;
+}
+static inline void crypto_init(struct crypto_context *c, const struct crypto_params *p) {
+	crypto_cleanup(c);
+	c->params = *p;
 }
 
 

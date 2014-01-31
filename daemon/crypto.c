@@ -230,11 +230,11 @@ int crypto_gen_session_key(struct crypto_context *c, str *out, unsigned char lab
 	 * key_derivation_rate == 0 --> r == 0 */
 
 	key_id[0] = label;
-	memcpy(x, c->signal.master_salt, 14);
+	memcpy(x, c->params.master_salt, 14);
 	for (i = 13 - index_len; i < 14; i++)
 		x[i] = key_id[i - (13 - index_len)] ^ x[i];
 
-	prf_n(out, c->signal.master_key, (char *) x);
+	prf_n(out, c->params.master_key, (char *) x);
 
 #if CRYPTO_DEBUG
 	mylog(LOG_DEBUG, "Generated session key: master key "
@@ -267,7 +267,7 @@ static int aes_cm_encrypt(struct crypto_context *c, u_int32_t ssrc, str *s, u_in
 	u_int32_t *ivi;
 	u_int32_t idxh, idxl;
 
-	memcpy(iv, c->signal.session_salt, 14);
+	memcpy(iv, c->session_salt, 14);
 	iv[14] = iv[15] = '\0';
 	ivi = (void *) iv;
 	idx <<= 16;
@@ -278,7 +278,7 @@ static int aes_cm_encrypt(struct crypto_context *c, u_int32_t ssrc, str *s, u_in
 	ivi[2] ^= idxh;
 	ivi[3] ^= idxl;
 
-	aes_ctr_128(s->s, s, c->oper.session_key_ctx[0], (char *) iv);
+	aes_ctr_128(s->s, s, c->session_key_ctx[0], (char *) iv);
 
 	return 0;
 }
@@ -305,7 +305,7 @@ static void aes_128_f8_encrypt(struct crypto_context *c, unsigned char *iv, str 
 	u_int64_t *pi, *ki, *lki, *xi;
 	u_int32_t *xu;
 
-	EVP_EncryptUpdate(c->oper.session_key_ctx[1], ivx, &outlen, iv, 16);
+	EVP_EncryptUpdate(c->session_key_ctx[1], ivx, &outlen, iv, 16);
 	assert(outlen == 16);
 
 	pi = (void *) s->s;
@@ -326,7 +326,7 @@ static void aes_128_f8_encrypt(struct crypto_context *c, unsigned char *iv, str 
 		xi[0] ^= lki[0];
 		xi[1] ^= lki[1];
 
-		EVP_EncryptUpdate(c->oper.session_key_ctx[0], key_block, &outlen, x, 16);
+		EVP_EncryptUpdate(c->session_key_ctx[0], key_block, &outlen, x, 16);
 		assert(outlen == 16);
 
 		if (G_UNLIKELY(left < 16)) {
@@ -389,15 +389,15 @@ static int hmac_sha1_rtp(struct crypto_context *c, char *out, str *in, u_int64_t
 	HMAC_CTX hc;
 	u_int32_t roc;
 
-	HMAC_Init(&hc, c->signal.session_auth_key, c->signal.crypto_suite->srtp_auth_key_len, EVP_sha1());
+	HMAC_Init(&hc, c->session_auth_key, c->params.crypto_suite->srtp_auth_key_len, EVP_sha1());
 	HMAC_Update(&hc, (unsigned char *) in->s, in->len);
 	roc = htonl((index & 0xffffffff0000ULL) >> 16);
 	HMAC_Update(&hc, (unsigned char *) &roc, sizeof(roc));
 	HMAC_Final(&hc, hmac, NULL);
 	HMAC_CTX_cleanup(&hc);
 
-	assert(sizeof(hmac) >= c->signal.crypto_suite->srtp_auth_tag);
-	memcpy(out, hmac, c->signal.crypto_suite->srtp_auth_tag);
+	assert(sizeof(hmac) >= c->params.crypto_suite->srtp_auth_tag);
+	memcpy(out, hmac, c->params.crypto_suite->srtp_auth_tag);
 
 	return 0;
 }
@@ -406,11 +406,11 @@ static int hmac_sha1_rtp(struct crypto_context *c, char *out, str *in, u_int64_t
 static int hmac_sha1_rtcp(struct crypto_context *c, char *out, str *in) {
 	unsigned char hmac[20];
 
-	HMAC(EVP_sha1(), c->signal.session_auth_key, c->signal.crypto_suite->srtcp_auth_key_len,
+	HMAC(EVP_sha1(), c->session_auth_key, c->params.crypto_suite->srtcp_auth_key_len,
 			(unsigned char *) in->s, in->len, hmac, NULL);
 
-	assert(sizeof(hmac) >= c->signal.crypto_suite->srtcp_auth_tag);
-	memcpy(out, hmac, c->signal.crypto_suite->srtcp_auth_tag);
+	assert(sizeof(hmac) >= c->params.crypto_suite->srtcp_auth_tag);
+	memcpy(out, hmac, c->params.crypto_suite->srtcp_auth_tag);
 
 	return 0;
 }
@@ -418,10 +418,10 @@ static int hmac_sha1_rtcp(struct crypto_context *c, char *out, str *in) {
 static int aes_cm_session_key_init(struct crypto_context *c) {
 	evp_session_key_cleanup(c);
 
-	c->oper.session_key_ctx[0] = g_slice_alloc(sizeof(EVP_CIPHER_CTX));
-	EVP_CIPHER_CTX_init(c->oper.session_key_ctx[0]);
-	EVP_EncryptInit_ex(c->oper.session_key_ctx[0], EVP_aes_128_ecb(), NULL,
-			(unsigned char *) c->signal.session_key, NULL);
+	c->session_key_ctx[0] = g_slice_alloc(sizeof(EVP_CIPHER_CTX));
+	EVP_CIPHER_CTX_init(c->session_key_ctx[0]);
+	EVP_EncryptInit_ex(c->session_key_ctx[0], EVP_aes_128_ecb(), NULL,
+			(unsigned char *) c->session_key, NULL);
 	return 0;
 }
 
@@ -433,21 +433,21 @@ static int aes_f8_session_key_init(struct crypto_context *c) {
 
 	aes_cm_session_key_init(c);
 
-	k_e_len = c->signal.crypto_suite->session_key_len;
-	k_s_len = c->signal.crypto_suite->session_salt_len;
-	key = (unsigned char *) c->signal.session_key;
+	k_e_len = c->params.crypto_suite->session_key_len;
+	k_s_len = c->params.crypto_suite->session_salt_len;
+	key = (unsigned char *) c->session_key;
 
 	/* m = k_s || 0x555..5 */
-	memcpy(m, c->signal.session_salt, k_s_len);
+	memcpy(m, c->session_salt, k_s_len);
 	for (i = k_s_len; i < k_e_len; i++)
 		m[i] = 0x55;
 	/* IV' = E(k_e XOR m, IV) */
 	for (i = 0; i < k_e_len; i++)
 		m[i] ^= key[i];
 
-	c->oper.session_key_ctx[1] = g_slice_alloc(sizeof(EVP_CIPHER_CTX));
-	EVP_CIPHER_CTX_init(c->oper.session_key_ctx[1]);
-	EVP_EncryptInit_ex(c->oper.session_key_ctx[1], EVP_aes_128_ecb(), NULL, m, NULL);
+	c->session_key_ctx[1] = g_slice_alloc(sizeof(EVP_CIPHER_CTX));
+	EVP_CIPHER_CTX_init(c->session_key_ctx[1]);
+	EVP_EncryptInit_ex(c->session_key_ctx[1], EVP_aes_128_ecb(), NULL, m, NULL);
 
 	return 0;
 }
@@ -456,14 +456,14 @@ static int evp_session_key_cleanup(struct crypto_context *c) {
 	unsigned char block[16];
 	int len, i;
 
-	for (i = 0; i < G_N_ELEMENTS(c->oper.session_key_ctx); i++) {
-		if (!c->oper.session_key_ctx[i])
+	for (i = 0; i < G_N_ELEMENTS(c->session_key_ctx); i++) {
+		if (!c->session_key_ctx[i])
 			continue;
 
-		EVP_EncryptFinal_ex(c->oper.session_key_ctx[i], block, &len);
-		EVP_CIPHER_CTX_cleanup(c->oper.session_key_ctx[i]);
-		g_slice_free1(sizeof(EVP_CIPHER_CTX), c->oper.session_key_ctx[i]);
-		c->oper.session_key_ctx[i] = NULL;
+		EVP_EncryptFinal_ex(c->session_key_ctx[i], block, &len);
+		EVP_CIPHER_CTX_cleanup(c->session_key_ctx[i]);
+		g_slice_free1(sizeof(EVP_CIPHER_CTX), c->session_key_ctx[i]);
+		c->session_key_ctx[i] = NULL;
 	}
 
 	return 0;

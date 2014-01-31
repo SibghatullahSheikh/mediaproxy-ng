@@ -868,20 +868,16 @@ int sdp_streams(const GQueue *sessions, GQueue *streams, struct sdp_ng_flags *fl
 
 			attr = attr_get_by_id(&media->attributes, ATTR_CRYPTO);
 			if (attr) {
-				sp->crypto.signal.crypto_suite = attr->u.crypto.crypto_suite;
-				sp->crypto.signal.mki = attr->u.crypto.mki;
-				sp->crypto.signal.mki_len = attr->u.crypto.mki_len;
-				sp->crypto.signal.tag = attr->u.crypto.tag;
-				assert(sizeof(sp->crypto.signal.master_key) >= attr->u.crypto.master_key.len);
-				assert(sizeof(sp->crypto.signal.master_salt) >= attr->u.crypto.salt.len);
-				memcpy(sp->crypto.signal.master_key, attr->u.crypto.master_key.s,
+				sp->crypto.crypto_suite = attr->u.crypto.crypto_suite;
+				sp->crypto.mki = attr->u.crypto.mki;
+				sp->crypto.mki_len = attr->u.crypto.mki_len;
+				sp->sdes_tag = attr->u.crypto.tag;
+				assert(sizeof(sp->crypto.master_key) >= attr->u.crypto.master_key.len);
+				assert(sizeof(sp->crypto.master_salt) >= attr->u.crypto.salt.len);
+				memcpy(sp->crypto.master_key, attr->u.crypto.master_key.s,
 						attr->u.crypto.master_key.len);
-				memcpy(sp->crypto.signal.master_salt, attr->u.crypto.salt.s,
+				memcpy(sp->crypto.master_salt, attr->u.crypto.salt.s,
 						attr->u.crypto.salt.len);
-				assert(sizeof(sp->crypto.signal.session_key)
-						>= sp->crypto.signal.crypto_suite->session_key_len);
-				assert(sizeof(sp->crypto.signal.session_salt)
-						>= sp->crypto.signal.crypto_suite->session_salt_len);
 			}
 
 			/* determine RTCP endpoint */
@@ -1140,12 +1136,6 @@ void sdp_chopper_destroy(struct sdp_chopper *chop) {
 	g_slice_free1(sizeof(*chop), chop);
 }
 
-/* XXX replace with better source of randomness */
-static void random_string(unsigned char *buf, int len) {
-	while (len--)
-		*buf++ = random() % 0x100;
-}
-
 static void random_ice_string(char *buf, int len) {
 	while (len--)
 		*buf++ = ice_chars[random() % strlen(ice_chars)];
@@ -1199,7 +1189,7 @@ strip:
 }
 
 static int process_media_attributes(struct sdp_chopper *chop, struct sdp_attributes *attrs,
-		struct sdp_ng_flags *flags)
+		struct sdp_ng_flags *flags, struct call_media *media)
 {
 	GList *l;
 	struct sdp_attribute *attr;
@@ -1218,17 +1208,8 @@ static int process_media_attributes(struct sdp_chopper *chop, struct sdp_attribu
 			case ATTR_RTCP:
 			case ATTR_RTCP_MUX:
 			case ATTR_EXTMAP:
-				goto strip;
-
 			case ATTR_CRYPTO:
-				switch (flags->transport_protocol) {
-					case PROTO_RTP_AVP:
-					case PROTO_RTP_AVPF:
-						goto strip;
-					default:
-						break;
-				}
-				break;
+				goto strip;
 
 			default:
 				break;
@@ -1367,82 +1348,33 @@ static int has_ice(GQueue *sessions) {
 	return 0;
 }
 
-static int generate_crypto(struct sdp_media *media, struct sdp_ng_flags *flags,
-		struct packet_stream *rtp, struct packet_stream *rtcp,
-		struct sdp_chopper *chop)
-{
-	struct crypto_context *c, *src = NULL;
+static void insert_crypto(struct call_media *media, struct sdp_chopper *chop) {
 	char b64_buf[64];
 	char *p;
 	int state = 0, save = 0;
+	struct crypto_params *cp = &media->sdes_out.params;
 
-	if (flags->transport_protocol != PROTO_RTP_SAVP
-			&& flags->transport_protocol != PROTO_RTP_SAVPF)
-		return 0;
-
-	if (attr_get_by_id(&media->attributes, ATTR_CRYPTO)) {
-		/* SRTP <> SRTP case, copy from other stream
-		 * and leave SDP untouched */
-		src = &rtp->rtp_sink->sfd->crypto;
-
-		c = &rtp->crypto;
-		if (!c->signal.crypto_suite)
-			*c = *src;
-
-		if (rtcp) {
-			c = &rtcp->crypto;
-			if (!c->signal.crypto_suite)
-				*c = *src;
-		}
-
-		return 0;
-	}
-
-	c = &rtp->crypto;
-	if (!c->signal.crypto_suite) {
-		c->signal.crypto_suite = rtp->sfd->crypto.signal.crypto_suite;
-		if (!c->signal.crypto_suite)
-			c->signal.crypto_suite = &crypto_suites[0];
-		random_string((unsigned char *) c->signal.master_key,
-				c->signal.crypto_suite->master_key_len);
-		random_string((unsigned char *) c->signal.master_salt,
-				c->signal.crypto_suite->master_salt_len);
-		/* mki = mki_len = 0 */
-		c->signal.tag = rtp->sfd->crypto.signal.tag;
-	}
-
-	assert(sizeof(b64_buf) >= (((c->signal.crypto_suite->master_key_len
-				+ c->signal.crypto_suite->master_salt_len)) / 3 + 1) * 4 + 4);
+	if (!cp->crypto_suite)
+		return;
 
 	p = b64_buf;
-	p += g_base64_encode_step((unsigned char *) c->signal.master_key,
-			c->signal.crypto_suite->master_key_len, 0,
+	p += g_base64_encode_step((unsigned char *) cp->master_key,
+			cp->crypto_suite->master_key_len, 0,
 			p, &state, &save);
-	p += g_base64_encode_step((unsigned char *) c->signal.master_salt,
-			c->signal.crypto_suite->master_salt_len, 0,
+	p += g_base64_encode_step((unsigned char *) cp->master_salt,
+			cp->crypto_suite->master_salt_len, 0,
 			p, &state, &save);
 	p += g_base64_encode_close(0, p, &state, &save);
 
-	if (rtcp) {
-		src = c;
-		c = &rtcp->crypto;
-
-		c->signal.crypto_suite = src->signal.crypto_suite;
-		c->signal.tag = src->signal.tag;
-		memcpy(c->signal.master_key, src->signal.master_key,
-				c->signal.crypto_suite->master_key_len);
-		memcpy(c->signal.master_salt, src->signal.master_salt,
-				c->signal.crypto_suite->master_salt_len);
-	}
+	assert(sizeof(b64_buf) >= (((cp->crypto_suite->master_key_len
+				+ cp->crypto_suite->master_salt_len)) / 3 + 1) * 4 + 4);
 
 	chopper_append_c(chop, "a=crypto:");
-	chopper_append_printf(chop, "%u ", c->signal.tag);
-	chopper_append_c(chop, c->signal.crypto_suite->name);
+	chopper_append_printf(chop, "%u ", media->sdes_out.tag);
+	chopper_append_c(chop, cp->crypto_suite->name);
 	chopper_append_c(chop, " inline:");
 	chopper_append_dup(chop, b64_buf, p - b64_buf);
 	chopper_append_c(chop, "\r\n");
-
-	return 0;
 }
 
 
@@ -1454,11 +1386,6 @@ int sdp_replace(struct sdp_chopper *chop, GQueue *sessions, struct call_monologu
 	struct sdp_media *sdp_media;
 	GList *l, *k, *m, *j;
 	int do_ice,  media_index, sess_conn;
-//	struct sdp_media *media;
-//	GList *l, *k, *m;
-//	int off, do_ice, r_flags, sess_conn;
-//	struct stream_input si, *sip;
-//	struct streamrelay *rtp, *rtcp;
 	unsigned long priority;
 	struct call_media *call_media;
 	struct packet_stream *ps, *ps_rtcp;
@@ -1528,8 +1455,6 @@ int sdp_replace(struct sdp_chopper *chop, GQueue *sessions, struct call_monologu
 				goto error;
 			if (replace_consecutive_port_count(chop, sdp_media, ps, j))
 				goto error;
-			if (flags->transport_protocol != PROTO_UNKNOWN)
-				call_media->protocol = flags->transport_protocol;
 			if (replace_transport_protocol(chop, sdp_media, call_media))
 				goto error;
 
@@ -1538,7 +1463,7 @@ int sdp_replace(struct sdp_chopper *chop, GQueue *sessions, struct call_monologu
 					goto error;
 			}
 
-			if (process_media_attributes(chop, &sdp_media->attributes, flags))
+			if (process_media_attributes(chop, &sdp_media->attributes, flags, call_media))
 				goto error;
 
 			copy_up_to_end_of(chop, &sdp_media->s);
@@ -1568,7 +1493,7 @@ int sdp_replace(struct sdp_chopper *chop, GQueue *sessions, struct call_monologu
 				chopper_append_c(chop, "\r\n");
 			}
 
-			generate_crypto(sdp_media, flags, ps, ps_rtcp, chop);
+			insert_crypto(call_media, chop);
 
 			if (do_ice) {
 				if (!call_media->ice_ufrag.s) {
