@@ -39,14 +39,9 @@
 #endif
 
 #define LOG_PREFIX_C "["STR_FORMAT"] "
-#define LOG_PREFIX_CI "["STR_FORMAT" - "STR_FORMAT"] "
+#define LOG_PREFIX_CI "["STR_FORMAT"] "
 #define LOG_PARAMS_C(c) STR_FMT(&(c)->callid)
-#define LOG_PARAMS_CI(c) STR_FMT(&(c)->callid), STR_FMT0(log_info)
-
-
-
-static __thread const str *log_info;
-
+#define LOG_PARAMS_CI(c) STR_FMT(&(c)->callid)
 
 
 
@@ -2229,10 +2224,9 @@ static str *call_update_lookup_udp(char **out, struct callmaster *m, enum call_o
 	c = call_get_opmode(&callid, m, opmode);
 	if (!c) {
 		mylog(LOG_WARNING, LOG_PREFIX_CI "Got UDP LOOKUP for unknown call-id",
-			STR_FMT(&callid), STR_FMT(&viabranch));
+			STR_FMT(&callid));
 		return str_sprintf("%s 0 " IPF "\n", out[RE_UDP_COOKIE], IPP(m->conf.ipv4));
 	}
-	//log_info = &viabranch;
 	monologue = call_get_mono_dialogue(c, &fromtag, &totag);
 
 	if (addr_parse_udp(&sp, out))
@@ -2256,7 +2250,6 @@ fail:
 	mylog(LOG_WARNING, "Failed to parse a media stream: %s/%s:%s", out[RE_UDP_UL_ADDR4], out[RE_UDP_UL_ADDR6], out[RE_UDP_UL_PORT]);
 	ret = str_sprintf("%s E8\n", out[RE_UDP_COOKIE]);
 out:
-	log_info = NULL;
 	obj_put(c);
 	return ret;
 }
@@ -2339,8 +2332,6 @@ static int call_delete_branch(struct callmaster *m, const str *callid, const str
 		goto err;
 	}
 
-	//log_info = branch;
-
 	if (!fromtag || !fromtag->s || !fromtag->len)
 		goto del_all;
 
@@ -2396,7 +2387,6 @@ err:
 	goto out;
 
 out:
-	log_info = NULL;
 	if (c)
 		obj_put(c);
 	return ret;
@@ -2707,7 +2697,6 @@ static const char *call_offer_answer_ng(bencode_item_t *input, struct callmaster
 			return "No to-tag in message";
 	}
 	//bencode_dictionary_get_str(input, "via-branch", &viabranch);
-	//log_info = &viabranch;
 
 	if (sdp_parse(&sdp, &parsed))
 		return "Failed to parse SDP";
@@ -2722,7 +2711,6 @@ static const char *call_offer_answer_ng(bencode_item_t *input, struct callmaster
 	errstr = "Unknown call-id";
 	if (!call)
 		goto out;
-	//log_info = &viabranch;
 
 	monologue = call_get_mono_dialogue(call, &fromtag, &totag);
 
@@ -2748,7 +2736,6 @@ static const char *call_offer_answer_ng(bencode_item_t *input, struct callmaster
 out:
 	sdp_free(&parsed);
 	streams_free(&streams);
-	log_info = NULL;
 
 	return errstr;
 }
