@@ -645,7 +645,6 @@ sub update_lookup {
 	for my $j (0 .. $num_streams) {
 		if (!$$fds_t[$j]) {
 			$NUM_STREAMS++;
-			undef($$tcx_o{in});
 			while (1) {
 				undef($$fds_t[$j]);
 				undef($$cfds_t[$j]);
@@ -721,7 +720,8 @@ a=rtcp:$cp
 		if (defined($oa) && $$oa[0] != $rpl) {
 			print("port change: $$oa[0] -> $rpl\n");
 			#print(Dumper($i, $c) . "\n");
-			undef($$c{trans_contexts}[$i]{out}{rtcp_index})
+			undef($$tcx_o{out}{rtcp_index});
+			undef($$tcx_o{out}{rtp_roc});
 		}
 	}
 	$$tr_o{sdp_parse_func} and $$tr_o{sdp_parse_func}($$o{sdp}, $tcx_o, $tcx);
@@ -780,6 +780,7 @@ while (time() < $end) {
 				undef($$c{fds}[$i]);
 				#print("\n" . Dumper($i, $c) . "\n");
 				undef($$c{trans_contexts}[$i]{in}{rtcp_index});
+				undef($$c{trans_contexts}[$i]{in}{rtp_roc});
 				$NUM_STREAMS--;
 			}
 			else {
