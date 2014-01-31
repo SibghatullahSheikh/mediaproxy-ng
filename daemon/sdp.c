@@ -1382,7 +1382,7 @@ static void insert_crypto(struct call_media *media, struct sdp_chopper *chop) {
 
 /* called with call->master_lock held in W */
 int sdp_replace(struct sdp_chopper *chop, GQueue *sessions, struct call_monologue *monologue,
-		struct sdp_ng_flags *flags)
+		struct sdp_ng_flags *flags, enum call_opmode opmode)
 {
 	struct sdp_session *session;
 	struct sdp_media *sdp_media;
@@ -1478,7 +1478,7 @@ int sdp_replace(struct sdp_chopper *chop, GQueue *sessions, struct call_monologu
 			copy_up_to_end_of(chop, &sdp_media->s);
 
 			ps_rtcp = NULL;
-			if (ps->has_rtcp_in_next) {
+			if (ps->rtcp_sibling) {
 				ps_rtcp = ps->rtcp_sibling;
 				j = j->next;
 				if (!j)
@@ -1492,15 +1492,19 @@ int sdp_replace(struct sdp_chopper *chop, GQueue *sessions, struct call_monologu
 				goto next;
 			}
 
-			if (call_media->rtcp_mux) {
+			if (call_media->rtcp_mux && opmode == OP_ANSWER) {
 				chopper_append_c(chop, "a=rtcp:");
 				chopper_append_printf(chop, "%hu", ps->sfd->fd.localport);
 				chopper_append_c(chop, "\r\na=rtcp-mux\r\n");
+				ps_rtcp = NULL;
 			}
 			else if (ps_rtcp) {
 				chopper_append_c(chop, "a=rtcp:");
 				chopper_append_printf(chop, "%hu", ps_rtcp->sfd->fd.localport);
-				chopper_append_c(chop, "\r\n");
+				if (!call_media->rtcp_mux)
+					chopper_append_c(chop, "\r\n");
+				else
+					chopper_append_c(chop, "\r\na=rtcp-mux\r\n");
 			}
 
 			insert_crypto(call_media, chop);

@@ -1510,7 +1510,6 @@ static void __init_streams(struct call_media *A, struct call_media *B, const str
 		if (!A->rtcp_mux) {
 			a->rtcp_sink = NULL;
 			a->rtcp = 0;
-			a->has_rtcp_in_next = 1;
 		}
 		else {
 			a->rtcp_sink = b;
@@ -1529,6 +1528,7 @@ static void __init_streams(struct call_media *A, struct call_media *B, const str
 		a->rtp_sink = NULL;
 		a->rtcp_sink = b;
 		a->rtcp = 1;
+		a->rtcp_sibling = NULL;
 
 		ax->rtcp_sibling = a;
 
@@ -2739,7 +2739,7 @@ static const char *call_offer_answer_ng(bencode_item_t *input, struct callmaster
 	bencode_buffer_destroy_add(output->buffer, (free_func_t) sdp_chopper_destroy, chopper);
 	/* XXX return value */
 	monologue_offer_answer(monologue, &streams, &flags);
-	ret = sdp_replace(chopper, &parsed, monologue, &flags);
+	ret = sdp_replace(chopper, &parsed, monologue, &flags, opmode);
 
 	rwlock_unlock_w(&call->master_lock);
 	redis_update(call, m->conf.redis);
