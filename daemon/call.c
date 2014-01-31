@@ -134,7 +134,7 @@ const char *transport_protocol_strings[__PROTO_LAST] = {
 
 
 
-static void determine_handler(struct packet_stream *in, struct packet_stream *out);
+static void determine_handler(struct packet_stream *in, const struct packet_stream *out);
 
 static int __k_null(struct mediaproxy_srtp *s, struct packet_stream *);
 static int __k_srtp_encrypt(struct mediaproxy_srtp *s, struct packet_stream *);
@@ -422,8 +422,8 @@ static int __k_srtp_decrypt(struct mediaproxy_srtp *s, struct packet_stream *str
 	return __k_srtp_crypt(s, &stream->sfd->crypto);
 }
 
-/* must be called with call->master_lock held in R, and in->in_lock and out->out_lock held */
-static void determine_handler(struct packet_stream *in, struct packet_stream *out) {
+/* must be called with call->master_lock held in R, and in->in_lock held */
+static void determine_handler(struct packet_stream *in, const struct packet_stream *out) {
 	const struct streamhandler **sh_pp, *sh;
 
 	if (in->has_handler)
@@ -489,8 +489,9 @@ void callmaster_msg_mh_src(struct callmaster *cm, struct msghdr *mh) {
 
 /* called lock-free */
 static int stream_packet(struct stream_fd *sfd, str *s, struct sockaddr_in6 *fsin) {
-	struct packet_stream *stream = sfd->stream;
-	struct packet_stream *sink = NULL;
+	struct packet_stream *stream = sfd->stream,
+			     *sink = NULL,
+			     *in_srtp, *out_srtp;
 	struct call_media *media;
 	int ret = 0, update = 0, stun_ret = 0, handler_ret = 0, muxed_rtcp = 0, rtcp = 0;
 	struct sockaddr_in6 sin6;
@@ -525,20 +526,30 @@ static int stream_packet(struct stream_fd *sfd, str *s, struct sockaddr_in6 *fsi
 			stun_ret = 0;
 	}
 
+	mutex_unlock(&stream->in_lock);
+
+	in_srtp = stream;
 	sink = stream->rtp_sink;
 	if (!sink && stream->rtcp) {
 		sink = stream->rtcp_sink;
 		rtcp = 1;
 	}
-	muxed_rtcp = rtcp_demux(s, media);
-	if (muxed_rtcp == 2) {
-		sink = stream->rtcp_sink;
-		rtcp = 1;
+	else {
+		muxed_rtcp = rtcp_demux(s, media);
+		if (muxed_rtcp == 2) {
+			sink = stream->rtcp_sink;
+			rtcp = 1;
+			in_srtp = stream->rtcp_sibling;
+		}
 	}
+	out_srtp = sink;
+	if (rtcp && sink->rtcp_sibling)
+		out_srtp = sink->rtcp_sibling;
 
 	if (!sink || !sink->sfd) {
 		mylog(LOG_WARNING, LOG_PREFIX_C "RTP packet to port %u discarded from %s", 
 			LOG_PARAMS_C(call), sfd->fd.localport, addr);
+		mutex_lock(&stream->in_lock);
 		stream->stats.errors++;
 		mutex_lock(&cm->statspslock);
 		cm->statsps.errors++;
@@ -546,30 +557,35 @@ static int stream_packet(struct stream_fd *sfd, str *s, struct sockaddr_in6 *fsi
 		goto done;
 	}
 
-	mutex_lock(&sink->out_lock);
+	mutex_lock(&in_srtp->in_lock);
 
-	determine_handler(stream, sink);
+	determine_handler(in_srtp, sink);
 
 	if (!rtcp) {
-		rwf_in = stream->handler->in->rtp;
-		rwf_out = stream->handler->out->rtp;
+		rwf_in = in_srtp->handler->in->rtp;
+		rwf_out = in_srtp->handler->out->rtp;
 	}
 	else {
-		rwf_in = stream->handler->in->rtcp;
-		rwf_out = stream->handler->out->rtcp;
+		rwf_in = in_srtp->handler->in->rtcp;
+		rwf_out = in_srtp->handler->out->rtcp;
 	}
+
+	mutex_lock(&out_srtp->out_lock);
 
 	/* return values are: 0 = forward packet, -1 = error/dont forward,
 	 * 1 = forward and push update to redis */
 	if (rwf_in)
-		handler_ret = rwf_in(s, stream);
+		handler_ret = rwf_in(s, in_srtp);
 	if (handler_ret >= 0 && rwf_out)
-		handler_ret += rwf_out(s, sink);
+		handler_ret += rwf_out(s, out_srtp);
 
 	if (handler_ret > 0)
 		update = 1;
 
-	mutex_unlock(&sink->out_lock);
+	mutex_unlock(&out_srtp->out_lock);
+	mutex_unlock(&in_srtp->in_lock);
+
+	mutex_lock(&stream->in_lock);
 
 use_cand:
 	if (!stream->filled)
@@ -1466,7 +1482,7 @@ static void __init_stream(struct packet_stream *ps) {
 
 static void __init_streams(struct call_media *A, struct call_media *B, const struct stream_params *sp) {
 	GList *la, *lb;
-	struct packet_stream *a, *b;
+	struct packet_stream *a, *ax, *b;
 	unsigned int port_off = 0;
 
 	la = A->streams.head;
@@ -1502,7 +1518,10 @@ static void __init_streams(struct call_media *A, struct call_media *B, const str
 			a->implicit_rtcp = 0;
 		}
 
-		/* if muxing, this is the fallback RTCP port */
+		ax = a;
+
+		/* if muxing, this is the fallback RTCP port. it also contains the RTCP
+		 * crypto context */
 		la = la->next;
 		assert(la != NULL);
 		a = la->data;
@@ -1510,6 +1529,8 @@ static void __init_streams(struct call_media *A, struct call_media *B, const str
 		a->rtp_sink = NULL;
 		a->rtcp_sink = b;
 		a->rtcp = 1;
+
+		ax->rtcp_sibling = a;
 
 		if (sp) {
 			if (sp->rtcp_endpoint.port) {

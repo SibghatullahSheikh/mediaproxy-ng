@@ -129,6 +129,7 @@ struct packet_stream {
 	struct stream_fd	*sfd;		/* LOCK: call->master_lock */
 	struct packet_stream	*rtp_sink;	/* LOCK: call->master_lock */
 	struct packet_stream	*rtcp_sink;	/* LOCK: call->master_lock */
+	struct packet_stream	*rtcp_sibling;	/* LOCK: call->master_lock */
 	const struct streamhandler *handler;	/* LOCK: in_lock */
 	struct endpoint		endpoint;	/* LOCK: out_lock */
 	struct endpoint		advertised_endpoint; /* RO */

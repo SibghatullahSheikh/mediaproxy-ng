@@ -1479,10 +1479,11 @@ int sdp_replace(struct sdp_chopper *chop, GQueue *sessions, struct call_monologu
 
 			ps_rtcp = NULL;
 			if (ps->has_rtcp_in_next) {
+				ps_rtcp = ps->rtcp_sibling;
 				j = j->next;
 				if (!j)
 					goto error;
-				ps_rtcp = j->data;
+				assert(j->data == ps_rtcp);
 			}
 
 			if (!sdp_media->port_num) {
