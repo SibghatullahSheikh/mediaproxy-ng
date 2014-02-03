@@ -16,7 +16,7 @@ use Data::Dumper;
 
 my ($NUM, $RUNTIME, $STREAMS, $PAYLOAD, $INTERVAL, $RTCP_INTERVAL, $STATS_INTERVAL)
 	= (1000, 30, 1, 160, 20, 5, 5);
-my ($NODEL, $IP, $IPV6, $KEEPGOING, $REINVITES, $BRANCHES, $PROTOS, $DEST, $SUITES, $NOENC, $RTCPMUX);
+my ($NODEL, $IP, $IPV6, $KEEPGOING, $REINVITES, $PROTOS, $DEST, $SUITES, $NOENC, $RTCPMUX);
 GetOptions(
 		'no-delete'	=> \$NODEL,
 		'num-calls=i'	=> \$NUM,
@@ -25,7 +25,6 @@ GetOptions(
 		'runtime=i'	=> \$RUNTIME,
 		'keep-going'	=> \$KEEPGOING,		# don't stop sending rtp if a packet doesn't go through
 		'reinvites'	=> \$REINVITES,
-		'branches'	=> \$BRANCHES,
 		'max-streams=i'	=> \$STREAMS,
 		'protocols=s'	=> \$PROTOS,		# "RTP/AVP,RTP/SAVP"
 		'destination=s'	=> \$DEST,
@@ -82,7 +81,7 @@ connect($fd, sockaddr_in($$DEST[1], inet_aton($$DEST[0]))) or die $!;
 
 msg({command => 'ping'})->{result} eq 'pong' or die;
 
-my (@calls, %branches);
+my (@calls, %calls);
 my %NOENC;
 
 sub send_receive {
@@ -491,46 +490,54 @@ sub do_rtp {
 	my ($rtcp) = @_;
 	for my $c (@calls) {
 		$c or next;
-		my ($fds,$outputs,$protos,$cfds,$trans,$tctxs)
-			= @$c{qw(fds outputs protos rtcp_fds transports trans_contexts)};
-		for my $j (0 .. $#{$$fds[0]}) {
-			for my $i ([0,1],[1,0]) {
-				my ($a, $b) = @$i;
-				my $pr = $$protos[$a];
-				my $tcx = $$tctxs[$a];
-				my $tcx_o = $$tctxs[$b];
-				my $addr = inet_pton($$pr{family}, $$outputs[$b][$j][1]);
-				my ($payload, $expect) = $$trans[$a]{rtp_func}($$trans[$b], $tcx, $tcx_o);
-				my $dst = $$pr{sockaddr}($$outputs[$b][$j][0], $addr);
-				my $repl = send_receive($$fds[$a][$j], $$fds[$b][$j], $payload, $dst);
+		for my $i ([0,1],[1,0]) {
+			my ($a, $b) = @$i;
+			my $A = $$c{sides}[$a];
+			my $B = $$c{sides}[$b];
+
+			my $rtp_fds = $$A{rtp_fds};
+			my $rtcp_fds = $$A{rtcp_fds};
+			my $rtp_fds_o = $$B{rtp_fds};
+			my $rtcp_fds_o = $$B{rtcp_fds};
+
+			my $pr = $$A{proto};;
+			my $trans = $$A{transport};
+			my $trans_o = $$B{transport};
+			my $tcx = $$A{trans_context};
+			my $tcx_o = $$B{trans_context};
+			my $outputs = $$A{outputs};
+
+			for my $j (0 .. $#$rtp_fds) {
+				my $addr = inet_pton($$pr{family}, $$outputs[$j][1]);
+				my ($payload, $expect) = $$trans{rtp_func}($trans_o, $tcx, $tcx_o);
+				my $dst = $$pr{sockaddr}($$outputs[$j][0], $addr);
+				my $repl = send_receive($$rtp_fds[$j], $$rtp_fds_o[$j], $payload, $dst);
 				$RTP_COUNT++;
 				if ($repl eq '') {
-					warn("no rtp reply received, ports $$outputs[$b][$j][0] and $$outputs[$a][$j][0]");
+					warn("no rtp reply received, port $$outputs[$j][0]");
 					$KEEPGOING or undef($c);
 				}
 				$NOENC and $repl = $expect;
 				!$repl && $KEEPGOING and next;
-				$repl eq $expect or die hexdump($repl, $expect) . " $$trans[$a]{name} > $$trans[$b]{name}, ports $$outputs[$b][$j][0] and $$outputs[$a][$j][0]";
+				$repl eq $expect or die hexdump($repl, $expect) . " $$trans{name} > $$trans_o{name}, RTP port $$outputs[$j][0]";
 
 				$rtcp or next;
-				($payload, $expect) = $$trans[$a]{rtcp_func}($$trans[$b], $tcx, $tcx_o);
-				my $dstport = $$outputs[$b][$j][0] + 1;
-				my $sendfd = $$cfds[$a][$j];
-				my $expfd = $$cfds[$b][$j];
-				if ($RTCPMUX) {
-					if (!$a) {
-						$dstport--;
-						$sendfd = $$fds[$a][$j];
-					}
-					else {
-						$expfd = $$fds[$b][$j];
-					}
+				($payload, $expect) = $$trans{rtcp_func}($trans_o, $tcx, $tcx_o);
+				my $dstport = $$outputs[$j][0] + 1;
+				my $sendfd = $$rtcp_fds[$j];
+				my $expfd = $$rtcp_fds_o[$j];
+				if ($$A{rtcpmux}) {
+					$dstport--;
+					$sendfd = $$rtp_fds[$j];
+				}
+				if ($$B{rtcpmux}) {
+					$expfd = $$rtp_fds_o[$j];
 				}
 				$dst = $$pr{sockaddr}($dstport, $addr);
 				$repl = send_receive($sendfd, $expfd, $payload, $dst);
 				$NOENC and $repl = $expect;
 				!$repl && $KEEPGOING and next;
-				$repl eq $expect or die hexdump($repl, $expect) . " $$trans[$a]{name} > $$trans[$b]{name}";
+				$repl eq $expect or die hexdump($repl, $expect) . " $$trans{name} > $$trans_o{name}, RTCP";
 			}
 		}
 	}
@@ -591,81 +598,97 @@ my %transports = map {$$_{name} => $_} @transports;
 
 sub callid {
 	my $i = rand_str(50);
-	$BRANCHES or return [$i];
-	rand() < .5 and return [$i];
-	if (rand() < .5) {
-		my @k = keys(%branches);
-		@k and $i = $k[rand(@k)];
-	}
-	my $b = rand_str(20);
-	push(@{$branches{$i}}, $b);
-	return [$i, $b];
+	return $i;
 }
 
 my $NUM_STREAMS = 0;
-sub update_lookup {
-	my ($c, $i) = @_;
-	my $j = $i ^ 1;
 
-	my $c_v = $$c{callid_viabranch} || ($$c{callid_viabranch} = callid());
-	my ($callid, $viabranch) = @$c_v;
+sub port_setup {
+	my ($r, $j) = @_;
 
-	my $protos = $$c{protos} || ($$c{protos} = []);
-	my $trans = $$c{transports} || ($$c{transports} = []);
-	my $tctxs = $$c{trans_contexts} || ($$c{trans_contexts} = []);
-	my $fds_a = $$c{fds} || ($$c{fds} = []);
-	my $cfds_a = $$c{rtcp_fds} || ($$c{rtcp_fds} = []);
-	for my $x (0,1) {
-		$$protos[$x] and next;
-		$$protos[$x] = $protos_avail[rand(@protos_avail)];
-		undef($$fds_a[$x]);
+	my $pr = $$r{proto};
+	my $rtp_fds = $$r{rtp_fds} = [];
+	my $rtcp_fds = $$r{rtcp_fds} = [];
+	my $ports = $$r{ports} = [];
+	my $ips = $$r{ips} = [];
+
+	while (1) {
+		socket(my $rtp, $$pr{family}, SOCK_DGRAM, 0) or die $!;
+		socket(my $rtcp, $$pr{family}, SOCK_DGRAM, 0) or die $!;
+		my $port = rand(0x7000) << 1 + 1024;
+		bind($rtp, $$pr{sockaddr}($port,
+			inet_pton($$pr{family}, $$pr{address}))) or next;
+		bind($rtcp, $$pr{sockaddr}($port + 1,
+			inet_pton($$pr{family}, $$pr{address}))) or next;
+
+		$$rtp_fds[$j] = $rtp;
+		$$rtcp_fds[$j] = $rtcp;
+
+		my $addr = getsockname($rtp);
+		my $ip;
+		($$ports[$j], $ip) = $$pr{sockaddr}($addr);
+		$$ips[$j] = inet_ntop($$pr{family}, $ip);
+
+		last;
 	}
-	for my $x (0,1) {
-		$$trans[$x] and next;
-		$$trans[$x] = ($PROTOS && $$PROTOS[$x] && $transports{$$PROTOS[$x]})
-			? $transports{$$PROTOS[$x]}
+}
+
+sub side_setup {
+	my ($i) = @_;
+	my $r = {};
+
+	my $pr = $$r{proto} = $protos_avail[rand(@protos_avail)];
+	$$r{transport} = ($PROTOS && $$PROTOS[$i] && $transports{$$PROTOS[$i]})
+			? $transports{$$PROTOS[$i]}
 			: $transports[rand(@transports)];
-	}
-	my ($pr, $pr_o) = @$protos[$i, $j];
-	my ($tr, $tr_o) = @$trans[$i, $j];
-	my $tcx = $$tctxs[$i] || ($$tctxs[$i] = {});
-	my $tcx_o = $$tctxs[$j] || ($$tctxs[$j] = {});
-	my @commands = qw(offer answer);
+	$$r{trans_context} = {};
+	$$r{outputs} = [];
 
-	my $ports_a = $$c{ports} || ($$c{ports} = []);
-	my $ports_t = $$ports_a[$i] || ($$ports_a[$i] = []);
-	my $ips_a = $$c{ips} || ($$c{ips} = []);
-	my $ips_t = $$ips_a[$i] || ($$ips_a[$i] = []);
-	my $fds_t = $$fds_a[$i] || ($$fds_a[$i] = []);
-	my $fds_o = $$fds_a[$j];
-	my $cfds_t = $$cfds_a[$i] || ($$cfds_a[$i] = []);
-	my $cfds_o = $$cfds_a[$j];
-	my $num_streams = int(rand($STREAMS));
-	($fds_o && @$fds_o) and $num_streams = $#$fds_o;
-	for my $j (0 .. $num_streams) {
-		if (!$$fds_t[$j]) {
-			$NUM_STREAMS++;
-			while (1) {
-				undef($$fds_t[$j]);
-				undef($$cfds_t[$j]);
-				socket($$fds_t[$j], $$pr{family}, SOCK_DGRAM, 0) or die $!;
-				socket($$cfds_t[$j], $$pr{family}, SOCK_DGRAM, 0) or die $!;
-				my $port = rand(0x7000) << 1 + 1024;
-				bind($$fds_t[$j], $$pr{sockaddr}($port,
-					inet_pton($$pr{family}, $$pr{address}))) or next;
-				bind($$cfds_t[$j], $$pr{sockaddr}($port + 1,
-					inet_pton($$pr{family}, $$pr{address}))) or next;
-				last;
-			}
-			my $addr = getsockname($$fds_t[$j]);
-			my $ip;
-			($$ports_t[$j], $ip) = $$pr{sockaddr}($addr);
-			$$ips_t[$j] = inet_ntop($$pr{family}, $ip);
-		}
+	$$r{num_streams} = int(rand($STREAMS));
+	$$r{rtp_fds} = [];
+	$$r{rtcp_fds} = [];
+	$$r{ports} = [];
+	$$r{ips} = [];
+
+	for my $j (0 .. $$r{num_streams}) {
+		$NUM_STREAMS++;
+		port_setup($r, $j);
 	}
 
-	my $tags = $$c{tags} || ($$c{tags} = []);
-	$$tags[$i] or $$tags[$i] = rand_str(15);
+	$$r{tag} = rand_str(15);
+	$RTCPMUX and $$r{want_rtcpmux} = rand() >= .3;
+
+	return $r;
+}
+
+sub call_setup {
+	my ($c) = @_;
+
+	$$c{setup} = 1;
+	$$c{callid} = callid();
+
+	$$c{sides}[0] = side_setup(0);
+	$$c{sides}[1] = side_setup(1);
+}
+
+sub offer_answer {
+	my ($c, $a, $b, $op) = @_;
+
+	$$c{setup} or call_setup($c);
+
+	my $callid = $$c{callid} || ($$c{callid} = callid());
+
+	my $A = $$c{sides}[$a];
+	my $B = $$c{sides}[$b];
+
+	my $pr = $$A{proto};
+	my $pr_o = $$B{proto};
+	my $ips_t = $$A{ips};
+	my $ports_t = $$A{ports};
+	my $tr = $$A{transport};
+	my $tr_o = $$B{transport};
+	my $tcx = $$A{trans_context};
+	my $tcx_o = $$B{trans_context};
 
 	my $sdp = <<"!";
 v=0
@@ -680,38 +703,39 @@ t=0 0
 m=audio $p $$tr{name} 8
 a=rtpmap:8 PCMA/8000
 !
-		if ($RTCPMUX && !$i) {
+		if ($$A{want_rtcpmux} && $op eq 'offer') {
 			$sdp .= "a=rtcp-mux\n";
-			rand() >= .5 and $sdp .= "a=rtcp:$p\n";
+			$sdp .= "a=rtcp:$cp\n";
+			$$A{rtcpmux} = 1;
 		}
 		else {
-			$sdp .= "a=rtcp:$cp\n";
+			rand() >= .5 and $sdp .= "a=rtcp:$cp\n";
 		}
 		$$tr{sdp_media_params} and $sdp .= $$tr{sdp_media_params}($tcx, $tcx_o);
 	}
-	$i or print("transport is $$tr{name} -> $$tr_o{name}\n");
+	$op eq 'offer' and print("transport is $$tr{name} -> $$tr_o{name}\n");
 
-	my $dict = {sdp => $sdp, command => $commands[$i], 'call-id' => $callid,
-		'from-tag' => $$tags[0],
+	my $dict = {sdp => $sdp, command => $op, 'call-id' => $$c{callid},
+		'from-tag' => $$A{tag},
 		flags => [ qw( trust-address ) ],
 		replace => [ qw( origin session-connection ) ],
 		direction => [ $$pr{direction}, $$pr_o{direction} ],
 		'received-from' => [ qw(IP4 127.0.0.1) ],
 		'transport-protocol' => $$tr_o{name},
 	};
-	$viabranch and $dict->{'via-branch'} = $viabranch;
-	$i == 1 and $dict->{'to-tag'} = $$tags[1];
+	#$viabranch and $dict->{'via-branch'} = $viabranch;
+	$op eq 'answer' and $dict->{'from-tag'} = $$B{tag},
+				$dict->{'to-tag'} = $$A{tag};
 
 	my $o = msg($dict);
 
 	$$o{result} eq 'ok' or die;
 	my ($rp_af, $rp_add) = $$o{sdp} =~ /c=IN IP([46]) (\S+)/s or die;
-	$RTCPMUX && $i and ($$o{sdp} =~ /a=rtcp-mux/s or die);
+	$$B{rtcpmux} and ($$o{sdp} =~ /a=rtcp-mux/s or die);
 	my @rp_ports = $$o{sdp} =~ /m=audio (\d+) \Q$$tr_o{name}\E /gs or die;
 	$rp_af ne $$pr_o{reply} and die "incorrect address family reply code";
-	my $old_outputs = $$c{outputs}[$i];
-	my $rpl_a = $$c{outputs} || ($$c{outputs} = []);
-	my $rpl_t = $$rpl_a[$i] = [];
+	my $old_outputs = $$B{outputs};
+	my $rpl_t = $$B{outputs} = [];
 	for my $rpl (@rp_ports) {
 		$rpl == 0 and die "mediaproxy ran out of ports";
 		push(@$rpl_t, [$rpl,$rp_add]);
@@ -726,16 +750,28 @@ a=rtpmap:8 PCMA/8000
 	$$tr_o{sdp_parse_func} and $$tr_o{sdp_parse_func}($$o{sdp}, $tcx_o, $tcx);
 }
 
+sub offer {
+	my ($c, $a, $b) = @_;
+	return offer_answer($c, $a, $b, 'offer');
+}
+sub answer {
+	my ($c, $a, $b) = @_;
+	return offer_answer($c, $a, $b, 'answer');
+}
+
 for my $iter (1 .. $NUM) {
 	($iter % 10 == 0) and print("$iter calls established\n"), do_rtp();
 
 	my $c = {};
-	update_lookup($c, 0);
-	update_lookup($c, 1);
+	offer($c, 0, 1);
+	answer($c, 1, 0);
 	push(@calls, $c);
+	$calls{$$c{callid}} = $c;
 }
 
 print("all calls established\n");
+
+#print(Dumper(\@calls) . "\n");
 
 my $end = time() + $RUNTIME;
 my $rtptime = Time::HiRes::gettimeofday();
@@ -772,23 +808,23 @@ while (time() < $end) {
 	if ($REINVITES && $now >= $last_reinv + 15) {
 		$last_reinv = $now;
 		my $c = $calls[rand(@calls)];
-		print("simulating re-invite on $$c{callid_viabranch}[0]");
+		print("simulating re-invite on $$c{callid}");
 		for my $i (0,1) {
+			my $s = $$c{sides}[$i];
 			if (rand() < .5) {
 				print(", side $sides[$i]: new port");
-				undef($$c{fds}[$i]);
+				port_setup($s, 0);
 				#print("\n" . Dumper($i, $c) . "\n");
-				undef($$c{trans_contexts}[$i]{in}{rtcp_index});
-				undef($$c{trans_contexts}[$i]{in}{rtp_roc});
-				$NUM_STREAMS--;
+				undef($$s{trans_context}{in}{rtcp_index});
+				undef($$s{trans_context}{in}{rtp_roc});
 			}
 			else {
 				print(", side $sides[$i]: same port");
 			}
 		}
 		print("\n");
-		update_lookup($c, 0);
-		update_lookup($c, 1);
+		offer($c, 0, 1);
+		answer($c, 1, 0);
 	}
 }
 
@@ -796,12 +832,12 @@ if (!$NODEL) {
 	print("deleting\n");
 	for my $c (@calls) {
 		$c or next;
-		my ($tags, $c_v) = @$c{qw(tags callid_viabranch)};
-		my ($callid, $viabranch) = @$c_v;
-		my $dict = { command => 'delete', 'call-id' => $callid, 'from-tag' => $$tags[0],
-			'to-tag' => $$tags[1],
+		my $callid = $$c{callid};
+		my $fromtag = $$c{sides}[0]{tag};
+		my $totag = $$c{sides}[1]{tag};
+		my $dict = { command => 'delete', 'call-id' => $callid, 'from-tag' => $fromtag,
+			'to-tag' => $totag,
 		};
-		$BRANCHES && rand() < .7 and $$dict{'via-branch'} = $viabranch;
 		msg($dict);
 	}
 }
