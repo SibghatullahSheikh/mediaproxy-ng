@@ -514,8 +514,6 @@ static int stream_packet(struct stream_fd *sfd, str *s, struct sockaddr_in6 *fsi
 	rwlock_lock_r(&call->master_lock);
 	mutex_lock(&stream->in_lock);
 
-	/* XXX check send/receive flags */
-
 	if (stream->stun && is_stun(s)) {
 		stun_ret = stun(s, stream, fsin);
 		if (!stun_ret)
@@ -862,8 +860,10 @@ static void call_timer_iterator(void *key, void *val, void *ptr) {
 			goto next;
 
 		check = cm->conf.timeout;
-		/* XXX silenced stream timeout handling
-		if (!sr->peer_advertised.port)
+		/* XXX silenced stream timeout handling */
+		if (!ps->media->recv)
+			check = cm->conf.silent_timeout;
+		/* if (!sr->peer_advertised.port)
 			check = cm->conf.silent_timeout;
 		else if (is_addr_unspecified(&sr->peer_advertised.ip46))
 			check = cm->conf.silent_timeout;
@@ -1632,6 +1632,9 @@ static int monologue_offer_answer(struct call_monologue *monologue, GQueue *stre
 		other_media->rtcp_mux = sp->rtcp_mux;
 		other_media->sdes_in.params = sp->crypto;
 		other_media->sdes_in.tag = sp->sdes_tag;
+
+		other_media->send = media->recv = sp->send;
+		other_media->recv = media->send = sp->recv;
 
 		__generate_crypto(media, other_media);
 

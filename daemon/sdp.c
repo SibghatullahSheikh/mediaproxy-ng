@@ -872,6 +872,21 @@ int sdp_streams(const GQueue *sessions, GQueue *streams, struct sdp_ng_flags *fl
 						attr->u.crypto.salt.len);
 			}
 
+			sp->send = 1;
+			sp->recv = 1;
+			if (attr_get_by_id(&media->attributes, ATTR_RECVONLY)
+					|| attr_get_by_id(&session->attributes, ATTR_RECVONLY))
+				sp->send = 0;
+			else if (attr_get_by_id(&media->attributes, ATTR_SENDONLY)
+					|| attr_get_by_id(&session->attributes, ATTR_SENDONLY))
+				sp->recv = 0;
+			else if (attr_get_by_id(&media->attributes, ATTR_INACTIVE)
+					|| attr_get_by_id(&session->attributes, ATTR_INACTIVE))
+			{
+				sp->recv = 0;
+				sp->send = 0;
+			}
+
 			/* determine RTCP endpoint */
 
 			if (attr_get_by_id(&media->attributes, ATTR_RTCP_MUX)) {
@@ -1172,6 +1187,10 @@ static int process_session_attributes(struct sdp_chopper *chop, struct sdp_attri
 				goto strip;
 
 			case ATTR_EXTMAP:
+			case ATTR_INACTIVE:
+			case ATTR_SENDONLY:
+			case ATTR_RECVONLY:
+			case ATTR_SENDRECV:
 				goto strip;
 
 			default:
@@ -1211,6 +1230,10 @@ static int process_media_attributes(struct sdp_chopper *chop, struct sdp_attribu
 			case ATTR_RTCP_MUX:
 			case ATTR_EXTMAP:
 			case ATTR_CRYPTO:
+			case ATTR_INACTIVE:
+			case ATTR_SENDONLY:
+			case ATTR_RECVONLY:
+			case ATTR_SENDRECV:
 				goto strip;
 
 			default:
@@ -1487,10 +1510,18 @@ int sdp_replace(struct sdp_chopper *chop, GQueue *sessions, struct call_monologu
 			}
 
 			if (!sdp_media->port_num) {
-				if (!attr_get_by_id(&sdp_media->attributes, ATTR_INACTIVE))
-					chopper_append_c(chop, "a=inactive\r\n");
+				chopper_append_c(chop, "a=inactive\r\n");
 				goto next;
 			}
+
+			if (call_media->send && call_media->recv)
+				chopper_append_c(chop, "a=sendrecv\r\n");
+			else if (call_media->send && !call_media->recv)
+				chopper_append_c(chop, "a=recvonly\r\n");
+			else if (!call_media->send && call_media->recv)
+				chopper_append_c(chop, "a=sendonly\r\n");
+			else
+				chopper_append_c(chop, "a=inactive\r\n");
 
 			if (call_media->rtcp_mux && opmode == OP_ANSWER) {
 				chopper_append_c(chop, "a=rtcp:");

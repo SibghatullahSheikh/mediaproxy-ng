@@ -100,6 +100,8 @@ struct stream_params {
 	int			no_rtcp:1;
 	int			implicit_rtcp:1;
 	int			rtcp_mux:1;
+	int			send:1;
+	int			recv:1;
 };
 
 struct stream_fd {
@@ -174,7 +176,7 @@ struct call_media {
 
 	int			asymmetric:1;
 	int			send:1;
-	int			receive:1;
+	int			recv:1;
 	int			rtcp_mux:1;
 };
 
