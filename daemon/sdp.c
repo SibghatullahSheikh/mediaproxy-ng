@@ -755,28 +755,6 @@ void sdp_free(GQueue *sessions) {
 	}
 }
 
-#if 0
-static int fill_stream_address(struct stream_input *si, struct sdp_media *media, struct sdp_ng_flags *flags) {
-	struct sdp_session *session = media->session;
-
-	if (!flags->trust_address) {
-		if (is_addr_unspecified(&flags->parsed_received_from)) {
-			if (__parse_address(&flags->parsed_received_from, NULL, &flags->received_from_family,
-						&flags->received_from_address))
-				return -1;
-		}
-		si->stream.ip46 = flags->parsed_received_from;
-	}
-	else if (media->connection.parsed)
-		si->stream.ip46 = media->connection.address.parsed;
-	else if (session->connection.parsed)
-		si->stream.ip46 = session->connection.address.parsed;
-	else
-		return -1;
-	return 0;
-}
-#endif
-
 static int fill_endpoint(struct endpoint *ep, const struct sdp_media *media, struct sdp_ng_flags *flags,
 		struct network_address *address, long int port) {
 	struct sdp_session *session = media->session;
@@ -811,24 +789,6 @@ static int fill_endpoint(struct endpoint *ep, const struct sdp_media *media, str
 	return 0;
 }
 
-#if 0
-static int fill_stream(struct stream_input *si, struct sdp_media *media, int offset, struct sdp_ng_flags *flags) {
-	if (fill_stream_address(si, media, flags))
-		return -1;
-
-	/* we ignore the media type */
-	si->stream.port = (media->port_num + (offset * 2)) & 0xffff;
-
-	return 0;
-}
-
-static int fill_stream_rtcp(struct stream_input *si, struct sdp_media *media, int port, struct sdp_ng_flags *flags) {
-	if (fill_stream_address(si, media, flags))
-		return -1;
-	si->stream.port = port;
-	return 0;
-}
-#endif
 
 int sdp_streams(const GQueue *sessions, GQueue *streams, struct sdp_ng_flags *flags) {
 	struct sdp_session *session;
@@ -1010,28 +970,6 @@ static int skip_over(struct sdp_chopper *chop, str *where) {
 	chop->position += len;
 	return 0;
 }
-
-#if 0
-static int fill_relays(struct streamrelay **rtp, struct streamrelay **rtcp, GList *m,
-		int off, struct stream_input *sip, struct sdp_media *media)
-{
-	*rtp = &((struct callstream *) m->data)->peers[off].rtps[0];
-
-	if (!rtcp)
-		return 1;
-
-	*rtcp = &((struct callstream *) m->data)->peers[off].rtps[1];
-	if (sip && sip->has_rtcp && m->next)
-		*rtcp = &((struct callstream *) m->next->data)->peers[off].rtps[0];
-
-	if ((*rtp)->rtcp_mux)
-		return 2;
-	if (!has_rtcp(media))
-		return 3;
-
-	return 0;
-}
-#endif
 
 static int replace_transport_protocol(struct sdp_chopper *chop,
 		struct sdp_media *media, struct call_media *cm)
@@ -1251,31 +1189,6 @@ strip:
 
 	return 0;
 }
-
-#if 0
-static GList *find_stream_num(GList *m, int num) {
-	/* XXX use a hash instead? must link input streams to output streams */
-	while (m && ((struct callstream *) m->data)->num < num)
-		m = m->next;
-	while (m && ((struct callstream *) m->data)->num > num)
-		m = m->prev;
-	return m;
-}
-
-static int has_rtcp(struct sdp_media *media) {
-	struct sdp_session *session;
-
-	if (!media)
-		return 0;
-
-	session = media->session;
-
-	if ((media->rr == -1 ? session->rr : media->rr) != 0
-			&& (media->rs == -1 ? session->rs : media->rs) != 0)
-		return 1;
-	return 0;
-}
-#endif
 
 static unsigned long prio_calc(unsigned int pref) {
 	return (1 << 24) * 126 + (1 << 8) * pref + 256 * 1;
