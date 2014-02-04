@@ -16,7 +16,7 @@ use Data::Dumper;
 
 my ($NUM, $RUNTIME, $STREAMS, $PAYLOAD, $INTERVAL, $RTCP_INTERVAL, $STATS_INTERVAL)
 	= (1000, 30, 1, 160, 20, 5, 5);
-my ($NODEL, $IP, $IPV6, $KEEPGOING, $REINVITES, $PROTOS, $DEST, $SUITES, $NOENC, $RTCPMUX);
+my ($NODEL, $IP, $IPV6, $KEEPGOING, $REINVITES, $PROTOS, $DEST, $SUITES, $NOENC, $RTCPMUX, $BUNDLE);
 GetOptions(
 		'no-delete'	=> \$NODEL,
 		'num-calls=i'	=> \$NUM,
@@ -35,6 +35,7 @@ GetOptions(
 		'suites=s'	=> \$SUITES,
 		'no-encrypt'	=> \$NOENC,
 		'rtcp-mux'	=> \$RTCPMUX,
+		'bundle'	=> \$BUNDLE,
 ) or die;
 
 ($IP || $IPV6) or die("at least one of --local-ip or --local-ipv6 must be given");
@@ -512,10 +513,16 @@ sub do_rtp {
 			my $outputs = $$A{outputs};
 
 			for my $j (0 .. ($$A{streams_active} - 1)) {
+				my ($bj_a, $bj_b) = ($j, $j);
+				$$A{bundle}
+					and $bj_a = 0;
+				$$B{bundle}
+					and $bj_b = 0;
+
 				my $addr = inet_pton($$pr{family}, $$outputs[$j][1]);
 				my ($payload, $expect) = $$trans{rtp_func}($trans_o, $$tcx[$j], $$tcx_o[$j]);
 				my $dst = $$pr{sockaddr}($$outputs[$j][0], $addr);
-				my $repl = send_receive($$rtp_fds[$j], $$rtp_fds_o[$j], $payload, $dst);
+				my $repl = send_receive($$rtp_fds[$bj_a], $$rtp_fds_o[$bj_b], $payload, $dst);
 				$RTP_COUNT++;
 				if ($repl eq '') {
 					warn("no rtp reply received, port $$outputs[$j][0]");
@@ -528,14 +535,14 @@ sub do_rtp {
 				$rtcp or next;
 				($payload, $expect) = $$trans{rtcp_func}($trans_o, $$tcx[$j], $$tcx_o[$j]);
 				my $dstport = $$outputs[$j][0] + 1;
-				my $sendfd = $$rtcp_fds[$j];
-				my $expfd = $$rtcp_fds_o[$j];
+				my $sendfd = $$rtcp_fds[$bj_a];
+				my $expfd = $$rtcp_fds_o[$bj_b];
 				if ($$A{rtcpmux}) {
 					$dstport--;
-					$sendfd = $$rtp_fds[$j];
+					$sendfd = $$rtp_fds[$bj_a];
 				}
 				if ($$B{rtcpmux}) {
-					$expfd = $$rtp_fds_o[$j];
+					$expfd = $$rtp_fds_o[$bj_b];
 				}
 				$dst = $$pr{sockaddr}($dstport, $addr);
 				$repl = send_receive($sendfd, $expfd, $payload, $dst);
@@ -664,6 +671,8 @@ sub side_setup {
 
 	$$r{tag} = rand_str(15);
 	$RTCPMUX and $$r{want_rtcpmux} = rand() >= .3;
+	$BUNDLE and $$r{want_bundle} = rand() >= .3;
+	$$r{want_bundle} and $$r{want_rtcpmux} = 1;
 
 	return $r;
 }
@@ -708,9 +717,20 @@ t=0 0
 	$op eq 'answer' && $$A{streams_seen} < $$A{num_streams}
 		and $ul = $$A{streams_seen};
 
+	$$A{want_bundle} && $op eq 'offer' and
+		$$A{bundle} = 1,
+		$sdp .= "a=group:BUNDLE " . join(' ', (0 .. $ul)) . "\n";
+
 	for my $i (0 .. $ul) {
-		my $p = $$ports_t[$i];
+		my $bi = $i;
+		$$A{bundle}
+			and $bi = 0;
+
+		my $p = $$ports_t[$bi];
 		my $cp = $p + 1;
+		$$A{bundle} && $$A{want_rtcpmux} && $op eq 'offer'
+			and $cp = $p;
+
 		$sdp .= <<"!";
 m=audio $p $$tr{name} 8
 a=rtpmap:8 PCMA/8000
@@ -724,6 +744,9 @@ a=rtpmap:8 PCMA/8000
 			rand() >= .5 and $sdp .= "a=rtcp:$cp\n";
 		}
 		$$tr{sdp_media_params} and $sdp .= $$tr{sdp_media_params}($$tcx[$i], $$tcx_o[$i]);
+
+		$$A{bundle} and
+			$sdp .= "a=mid:$i\n";
 	}
 
 	for my $x (($ul + 1) .. $$A{streams_seen}) {
@@ -733,6 +756,7 @@ a=rtpmap:8 PCMA/8000
 	$op eq 'offer' and print("transport is $$tr{name} -> $$tr_o{name}\n");
 
 	#print(Dumper($op, $A, $B, $sdp) . "\n\n\n\n");
+	#print("sdp $op in:\n$sdp\n\n");
 
 	my $dict = {sdp => $sdp, command => $op, 'call-id' => $$c{callid},
 		'from-tag' => $$A{tag},
@@ -749,6 +773,7 @@ a=rtpmap:8 PCMA/8000
 	my $o = msg($dict);
 
 	$$o{result} eq 'ok' or die;
+	#print("sdp $op out:\n$$o{sdp}\n\n\n\n");
 	my ($rp_af, $rp_add) = $$o{sdp} =~ /c=IN IP([46]) (\S+)/s or die;
 	$$B{rtcpmux} and ($$o{sdp} =~ /a=rtcp-mux/s or die);
 	my @rp_ports = $$o{sdp} =~ /m=audio (\d+) \Q$$tr_o{name}\E /gs or die;
