@@ -462,18 +462,22 @@ sub rtp_savp {
 sub savp_crypto {
 	my ($sdp, $ctx, $ctx_o) = @_;
 
-	my $cs = $$ctx_o{out}{crypto_suite}{str};
-	my $re = $cs ? qr/\Q$cs\E/ : qr/\w+/;
-	my @a = $sdp =~ /[\r\n]a=crypto:\d+ ($re) inline:([\w\/+]{40})(?:\|(?:2\^(\d+)|(\d+)))?(?:\|(\d+):(\d+))?[\r\n]/si;
+	my @a = $sdp =~ /[\r\n]a=crypto:\d+ (\w+) inline:([\w\/+]{40})(?:\|(?:2\^(\d+)|(\d+)))?(?:\|(\d+):(\d+))?[\r\n]/sig;
 	@a or die;
-	$$ctx{in}{crypto_suite} = $crypto_suites{$a[0]} or die;
-	my $ks = decode_base64($a[1]);
-	length($ks) == 30 or die;
-	($$ctx{in}{rtp_master_key}, $$ctx{in}{rtp_master_salt}) = unpack('a16a14', $ks);
-	$$ctx{in}{rtp_mki} = $a[4];
-	$$ctx{in}{rtp_mki_len} = $a[5];
-	undef($$ctx{in}{rtp_session_key});
-	undef($$ctx{in}{rtcp_session_key});
+	my $i = 0;
+	while (@a >= 6) {
+		$$ctx[$i]{in}{crypto_suite} = $crypto_suites{$a[0]} or die;
+		my $ks = decode_base64($a[1]);
+		length($ks) == 30 or die;
+		($$ctx[$i]{in}{rtp_master_key}, $$ctx[$i]{in}{rtp_master_salt}) = unpack('a16a14', $ks);
+		$$ctx[$i]{in}{rtp_mki} = $a[4];
+		$$ctx[$i]{in}{rtp_mki_len} = $a[5];
+		undef($$ctx[$i]{in}{rtp_session_key});
+		undef($$ctx[$i]{in}{rtcp_session_key});
+
+		$i++;
+		@a = @a[6 .. $#a];
+	}
 }
 
 sub hexdump {
@@ -503,13 +507,13 @@ sub do_rtp {
 			my $pr = $$A{proto};;
 			my $trans = $$A{transport};
 			my $trans_o = $$B{transport};
-			my $tcx = $$A{trans_context};
-			my $tcx_o = $$B{trans_context};
+			my $tcx = $$A{trans_contexts};
+			my $tcx_o = $$B{trans_contexts};
 			my $outputs = $$A{outputs};
 
 			for my $j (0 .. ($$A{streams_active} - 1)) {
 				my $addr = inet_pton($$pr{family}, $$outputs[$j][1]);
-				my ($payload, $expect) = $$trans{rtp_func}($trans_o, $tcx, $tcx_o);
+				my ($payload, $expect) = $$trans{rtp_func}($trans_o, $$tcx[$j], $$tcx_o[$j]);
 				my $dst = $$pr{sockaddr}($$outputs[$j][0], $addr);
 				my $repl = send_receive($$rtp_fds[$j], $$rtp_fds_o[$j], $payload, $dst);
 				$RTP_COUNT++;
@@ -522,7 +526,7 @@ sub do_rtp {
 				$repl eq $expect or die hexdump($repl, $expect) . " $$trans{name} > $$trans_o{name}, RTP port $$outputs[$j][0]";
 
 				$rtcp or next;
-				($payload, $expect) = $$trans{rtcp_func}($trans_o, $tcx, $tcx_o);
+				($payload, $expect) = $$trans{rtcp_func}($trans_o, $$tcx[$j], $$tcx_o[$j]);
 				my $dstport = $$outputs[$j][0] + 1;
 				my $sendfd = $$rtcp_fds[$j];
 				my $expfd = $$rtcp_fds_o[$j];
@@ -611,6 +615,8 @@ sub port_setup {
 	my $rtcp_fds = $$r{rtcp_fds};
 	my $ports = $$r{ports};
 	my $ips = $$r{ips};
+	my $tcx = $$r{trans_contexts};
+	$$tcx[$j] or $$tcx[$j] = {};
 
 	while (1) {
 		socket(my $rtp, $$pr{family}, SOCK_DGRAM, 0) or die $!;
@@ -641,7 +647,7 @@ sub side_setup {
 	$$r{transport} = ($PROTOS && $$PROTOS[$i] && $transports{$$PROTOS[$i]})
 			? $transports{$$PROTOS[$i]}
 			: $transports[rand(@transports)];
-	$$r{trans_context} = {};
+	$$r{trans_contexts} = [];
 	$$r{outputs} = [];
 
 	$$r{num_streams} = int(rand($STREAMS));
@@ -688,8 +694,8 @@ sub offer_answer {
 	my $ports_t = $$A{ports};
 	my $tr = $$A{transport};
 	my $tr_o = $$B{transport};
-	my $tcx = $$A{trans_context};
-	my $tcx_o = $$B{trans_context};
+	my $tcx = $$A{trans_contexts};
+	my $tcx_o = $$B{trans_contexts};
 
 	my $sdp = <<"!";
 v=0
@@ -717,7 +723,7 @@ a=rtpmap:8 PCMA/8000
 		else {
 			rand() >= .5 and $sdp .= "a=rtcp:$cp\n";
 		}
-		$$tr{sdp_media_params} and $sdp .= $$tr{sdp_media_params}($tcx, $tcx_o);
+		$$tr{sdp_media_params} and $sdp .= $$tr{sdp_media_params}($$tcx[$i], $$tcx_o[$i]);
 	}
 
 	for my $x (($ul + 1) .. $$A{streams_seen}) {
@@ -772,8 +778,8 @@ a=rtpmap:8 PCMA/8000
 		if (defined($oa) && $$oa[0] != $rpl) {
 			print("port change: $$oa[0] -> $rpl\n");
 			#print(Dumper($i, $c) . "\n");
-			undef($$tcx_o{out}{rtcp_index});
-			undef($$tcx_o{out}{rtp_roc});
+			undef($$tcx_o[$i]{out}{rtcp_index});
+			undef($$tcx_o[$i]{out}{rtp_roc});
 		}
 	}
 	$$tr_o{sdp_parse_func} and $$tr_o{sdp_parse_func}($$o{sdp}, $tcx_o, $tcx);
@@ -846,8 +852,8 @@ while (time() < $end) {
 					print("\tside $sides[$i] stream #$j: new port\n");
 					port_setup($s, $j);
 					#print("\n" . Dumper($i, $c) . "\n");
-					undef($$s{trans_context}{in}{rtcp_index});
-					undef($$s{trans_context}{in}{rtp_roc});
+					undef($$s{trans_contexts}[$j]{in}{rtcp_index});
+					undef($$s{trans_contexts}[$j]{in}{rtp_roc});
 				}
 				else {
 					print("\tside $sides[$i] stream #$j: same port\n");
