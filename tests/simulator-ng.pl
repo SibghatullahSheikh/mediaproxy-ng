@@ -507,7 +507,7 @@ sub do_rtp {
 			my $tcx_o = $$B{trans_context};
 			my $outputs = $$A{outputs};
 
-			for my $j (0 .. $#$rtp_fds) {
+			for my $j (0 .. ($$A{streams_active} - 1)) {
 				my $addr = inet_pton($$pr{family}, $$outputs[$j][1]);
 				my ($payload, $expect) = $$trans{rtp_func}($trans_o, $tcx, $tcx_o);
 				my $dst = $$pr{sockaddr}($$outputs[$j][0], $addr);
@@ -607,10 +607,10 @@ sub port_setup {
 	my ($r, $j) = @_;
 
 	my $pr = $$r{proto};
-	my $rtp_fds = $$r{rtp_fds} = [];
-	my $rtcp_fds = $$r{rtcp_fds} = [];
-	my $ports = $$r{ports} = [];
-	my $ips = $$r{ips} = [];
+	my $rtp_fds = $$r{rtp_fds};
+	my $rtcp_fds = $$r{rtcp_fds};
+	my $ports = $$r{ports};
+	my $ips = $$r{ips};
 
 	while (1) {
 		socket(my $rtp, $$pr{family}, SOCK_DGRAM, 0) or die $!;
@@ -645,13 +645,14 @@ sub side_setup {
 	$$r{outputs} = [];
 
 	$$r{num_streams} = int(rand($STREAMS));
+	$$r{streams_seen} = 0;
+	$$r{streams_active} = 0;
 	$$r{rtp_fds} = [];
 	$$r{rtcp_fds} = [];
 	$$r{ports} = [];
 	$$r{ips} = [];
 
 	for my $j (0 .. $$r{num_streams}) {
-		$NUM_STREAMS++;
 		port_setup($r, $j);
 	}
 
@@ -697,7 +698,12 @@ s=session
 c=IN $$pr{family_str} $$ips_t[0]
 t=0 0
 !
-	for my $p (@$ports_t) {
+	my $ul = $$A{num_streams};
+	$op eq 'answer' && $$A{streams_seen} < $$A{num_streams}
+		and $ul = $$A{streams_seen};
+
+	for my $i (0 .. $ul) {
+		my $p = $$ports_t[$i];
 		my $cp = $p + 1;
 		$sdp .= <<"!";
 m=audio $p $$tr{name} 8
@@ -713,7 +719,14 @@ a=rtpmap:8 PCMA/8000
 		}
 		$$tr{sdp_media_params} and $sdp .= $$tr{sdp_media_params}($tcx, $tcx_o);
 	}
+
+	for my $x (($ul + 1) .. $$A{streams_seen}) {
+		$sdp .= "m=audio 0 $$tr{name} 0\n";
+	}
+
 	$op eq 'offer' and print("transport is $$tr{name} -> $$tr_o{name}\n");
+
+	#print(Dumper($op, $A, $B, $sdp) . "\n\n\n\n");
 
 	my $dict = {sdp => $sdp, command => $op, 'call-id' => $$c{callid},
 		'from-tag' => $$A{tag},
@@ -733,11 +746,27 @@ a=rtpmap:8 PCMA/8000
 	my ($rp_af, $rp_add) = $$o{sdp} =~ /c=IN IP([46]) (\S+)/s or die;
 	$$B{rtcpmux} and ($$o{sdp} =~ /a=rtcp-mux/s or die);
 	my @rp_ports = $$o{sdp} =~ /m=audio (\d+) \Q$$tr_o{name}\E /gs or die;
+	$$B{streams_seen} = $#rp_ports;
 	$rp_af ne $$pr_o{reply} and die "incorrect address family reply code";
+	$NUM_STREAMS -= $$B{streams_active};
+	$$B{streams_active} = 0;
 	my $old_outputs = $$B{outputs};
 	my $rpl_t = $$B{outputs} = [];
-	for my $rpl (@rp_ports) {
-		$rpl == 0 and die "mediaproxy ran out of ports";
+	for my $i (0 .. $#rp_ports) {
+		my $rpl = $rp_ports[$i];
+
+		if ($rpl == 0) {
+			$op eq 'offer' and $$B{streams_seen}--;
+			if ($$A{rtp_fds}[$i]) {
+				undef($$A{rtp_fds}[$i]);
+			}
+			next;
+		}
+
+		$$B{ports}[$i] or next;
+
+		$$B{streams_active}++;
+		$NUM_STREAMS++;
 		push(@$rpl_t, [$rpl,$rp_add]);
 		my $oa = shift(@$old_outputs);
 		if (defined($oa) && $$oa[0] != $rpl) {
@@ -748,6 +777,7 @@ a=rtpmap:8 PCMA/8000
 		}
 	}
 	$$tr_o{sdp_parse_func} and $$tr_o{sdp_parse_func}($$o{sdp}, $tcx_o, $tcx);
+	#print(Dumper($op, $A, $B) . "\n\n\n\n");
 }
 
 sub offer {
@@ -808,21 +838,22 @@ while (time() < $end) {
 	if ($REINVITES && $now >= $last_reinv + 15) {
 		$last_reinv = $now;
 		my $c = $calls[rand(@calls)];
-		print("simulating re-invite on $$c{callid}");
+		print("simulating re-invite on $$c{callid}\n");
 		for my $i (0,1) {
 			my $s = $$c{sides}[$i];
-			if (rand() < .5) {
-				print(", side $sides[$i]: new port");
-				port_setup($s, 0);
-				#print("\n" . Dumper($i, $c) . "\n");
-				undef($$s{trans_context}{in}{rtcp_index});
-				undef($$s{trans_context}{in}{rtp_roc});
-			}
-			else {
-				print(", side $sides[$i]: same port");
+			for my $j (0 .. $$s{num_streams}) {
+				if (rand() < .5) {
+					print("\tside $sides[$i] stream #$j: new port\n");
+					port_setup($s, $j);
+					#print("\n" . Dumper($i, $c) . "\n");
+					undef($$s{trans_context}{in}{rtcp_index});
+					undef($$s{trans_context}{in}{rtp_roc});
+				}
+				else {
+					print("\tside $sides[$i] stream #$j: same port\n");
+				}
 			}
 		}
-		print("\n");
 		offer($c, 0, 1);
 		answer($c, 1, 0);
 	}
