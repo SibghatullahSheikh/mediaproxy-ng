@@ -514,6 +514,9 @@ static int stream_packet(struct stream_fd *sfd, str *s, struct sockaddr_in6 *fsi
 	rwlock_lock_r(&call->master_lock);
 	mutex_lock(&stream->in_lock);
 
+	if (!stream->sfd)
+		goto done;
+
 	if (stream->stun && is_stun(s)) {
 		stun_ret = stun(s, stream, fsin);
 		if (!stun_ret)
@@ -544,7 +547,7 @@ static int stream_packet(struct stream_fd *sfd, str *s, struct sockaddr_in6 *fsi
 	if (rtcp && sink->rtcp_sibling)
 		out_srtp = sink->rtcp_sibling;
 
-	if (!sink || !sink->sfd) {
+	if (!sink || !sink->sfd || !out_srtp->sfd || !in_srtp->sfd) {
 		mylog(LOG_WARNING, LOG_PREFIX_C "RTP packet to port %u discarded from %s", 
 			LOG_PARAMS_C(call), sfd->fd.localport, addr);
 		mutex_lock(&stream->in_lock);
@@ -860,14 +863,8 @@ static void call_timer_iterator(void *key, void *val, void *ptr) {
 			goto next;
 
 		check = cm->conf.timeout;
-		/* XXX silenced stream timeout handling */
-		if (!ps->media->recv)
+		if (!ps->media->recv || !ps->sfd)
 			check = cm->conf.silent_timeout;
-		/* if (!sr->peer_advertised.port)
-			check = cm->conf.silent_timeout;
-		else if (is_addr_unspecified(&sr->peer_advertised.ip46))
-			check = cm->conf.silent_timeout;
-		*/
 
 		if (poller_now - ps->last_packet < check)
 			good = 1;
@@ -1063,11 +1060,14 @@ static void callmaster_timer(void *ptr) {
 		sfd = hlp.ports[ke->target.target_port];
 		if (!sfd)
 			goto next;
-		ps = sfd->stream;
-		if (!ps)
-			goto next;
 
-		rwlock_lock_r(&ps->call->master_lock);
+		rwlock_lock_r(&sfd->call->master_lock);
+
+		ps = sfd->stream;
+		if (!ps || ps->sfd != sfd) {
+			rwlock_unlock_r(&sfd->call->master_lock);
+			goto next;
+		}
 
 		DS(packets);
 		DS(bytes);
@@ -1097,16 +1097,16 @@ static void callmaster_timer(void *ptr) {
 			sink->crypto.last_index = ke->target.encrypt.last_index;
 			update = 1;
 		}
-		if (ps->sfd->crypto.params.crypto_suite
-				&& ke->target.decrypt.last_index - ps->sfd->crypto.last_index > 0x4000) {
-			ps->sfd->crypto.last_index = ke->target.decrypt.last_index;
+		if (sfd->crypto.params.crypto_suite
+				&& ke->target.decrypt.last_index - sfd->crypto.last_index > 0x4000) {
+			sfd->crypto.last_index = ke->target.decrypt.last_index;
 			update = 1;
 		}
 
 		if (sink)
 			mutex_unlock(&sink->out_lock);
 		mutex_unlock(&ps->in_lock);
-		rwlock_unlock_r(&ps->call->master_lock);
+		rwlock_unlock_r(&sfd->call->master_lock);
 
 		if (update)
 			redis_update(ps->call, m->conf.redis);
@@ -1115,6 +1115,8 @@ next:
 		hlp.ports[ke->target.target_port] = NULL;
 		g_slice_free1(sizeof(*ke), ke);
 		i = g_list_delete_link(i, i);
+		if (sfd)
+			obj_put(sfd);
 	}
 
 	for (j = 0; j < (sizeof(hlp.ports) / sizeof(*hlp.ports)); j++)
@@ -1476,7 +1478,8 @@ static void __fill_stream(struct packet_stream *ps, const struct endpoint *ep, u
 static void __init_stream(struct packet_stream *ps) {
 	struct call_media *media = ps->media;
 
-	crypto_init(&ps->sfd->crypto, &media->sdes_in.params);
+	if (ps->sfd)
+		crypto_init(&ps->sfd->crypto, &media->sdes_in.params);
 	crypto_init(&ps->crypto, &media->sdes_out.params);
 }
 
@@ -1583,6 +1586,19 @@ static void __generate_crypto(struct call_media *this, struct call_media *other)
 	/* mki = mki_len = 0 */
 }
 
+
+static void __disable_streams(struct call_media *media, unsigned int num_ports) {
+	GList *l;
+	struct packet_stream *ps;
+
+	__num_media_streams(media, num_ports);
+
+	for (l = media->streams.head; l; l = l->next) {
+		ps = l->data;
+		ps->sfd = NULL;
+	}
+}
+
 /* called with call->master_lock held in W */
 static int monologue_offer_answer(struct call_monologue *monologue, GQueue *streams,
 		struct sdp_ng_flags *flags)
@@ -1657,6 +1673,18 @@ static int monologue_offer_answer(struct call_monologue *monologue, GQueue *stre
 		num_ports = sp->consecutive_ports;
 		num_ports *= 2;
 
+
+		if (!sp->rtp_endpoint.port || is_addr_unspecified(&sp->rtp_endpoint.ip46)) {
+			/* Zero port or endpoint: stream has been rejected.
+			 * RFC 3264, chapter 6:
+			 * If a stream is rejected, the offerer and answerer MUST NOT
+			 * generate media (or RTCP packets) for that stream. */
+			__disable_streams(media, num_ports);
+			__disable_streams(other_media, num_ports);
+			goto init;
+		}
+
+
 		/* get that many ports for each side, and one packet stream for each port, then
 		 * assign the ports to the streams */
 		em = __get_endpoint_map(media, num_ports, &sp->rtp_endpoint);
@@ -1674,6 +1702,7 @@ static int monologue_offer_answer(struct call_monologue *monologue, GQueue *stre
 				goto error;
 		}
 
+init:
 		__init_streams(media, other_media, NULL);
 		__init_streams(other_media, media, sp);
 	}
@@ -1885,11 +1914,10 @@ static int call_stream_address_gstring(GString *o, struct packet_stream *ps, enu
 
 static str *streams_print(GQueue *s, int start, int end, const char *prefix, enum stream_address_format format) {
 	GString *o;
-	int i;
+	int i, af, port;
 	GList *l;
 	struct call_media *media;
 	struct packet_stream *ps;
-	int af;
 
 	o = g_string_new_str();
 	if (prefix)
@@ -1914,7 +1942,8 @@ found:
 		if (format == SAF_TCP)
 			call_stream_address_gstring(o, ps, format);
 
-		g_string_append_printf(o, (format == 1) ? "%u " : " %u", ps->sfd->fd.localport);
+		port = ps->sfd ? ps->sfd->fd.localport : 0;
+		g_string_append_printf(o, (format == 1) ? "%i " : " %i", port);
 
 		if (format == SAF_UDP) {
 			af = call_stream_address_gstring(o, ps, format);

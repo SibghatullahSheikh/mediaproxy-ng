@@ -991,6 +991,7 @@ static int replace_transport_protocol(struct sdp_chopper *chop,
 
 static int replace_media_port(struct sdp_chopper *chop, struct sdp_media *media, struct packet_stream *ps) {
 	str *port = &media->port;
+	unsigned int p;
 
 	if (!media->port_num)
 		return 0;
@@ -998,7 +999,8 @@ static int replace_media_port(struct sdp_chopper *chop, struct sdp_media *media,
 	if (copy_up_to(chop, port))
 		return -1;
 
-	chopper_append_printf(chop, "%hu", ps->sfd->fd.localport);
+	p = ps->sfd ? ps->sfd->fd.localport : 0;
+	chopper_append_printf(chop, "%u", p);
 
 	if (skip_over(chop, port))
 		return -1;
@@ -1012,7 +1014,7 @@ static int replace_consecutive_port_count(struct sdp_chopper *chop, struct sdp_m
 	int cons;
 	struct packet_stream *ps_n;
 
-	if (media->port_count == 1)
+	if (media->port_count == 1 || !ps->sfd)
 		return 0;
 
 	for (cons = 1; cons < media->port_count; cons++) {
@@ -1422,7 +1424,7 @@ int sdp_replace(struct sdp_chopper *chop, GQueue *sessions, struct call_monologu
 				assert(j->data == ps_rtcp);
 			}
 
-			if (!sdp_media->port_num) {
+			if (!sdp_media->port_num || !ps->sfd) {
 				chopper_append_c(chop, "a=inactive\r\n");
 				goto next;
 			}
