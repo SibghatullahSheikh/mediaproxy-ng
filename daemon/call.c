@@ -1633,8 +1633,8 @@ static int monologue_offer_answer(struct call_monologue *monologue, GQueue *stre
 		other_media->sdes_in.params = sp->crypto;
 		other_media->sdes_in.tag = sp->sdes_tag;
 
-		other_media->send = media->recv = sp->send;
-		other_media->recv = media->send = sp->recv;
+		other_media->recv = media->send = sp->send;
+		other_media->send = media->recv = sp->recv;
 
 		__generate_crypto(media, other_media);
 
