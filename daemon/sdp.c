@@ -112,6 +112,13 @@ struct attribute_ssrc {
 	str value;
 };
 
+struct attribute_group {
+	enum {
+		GROUP_OTHER = 0,
+		GROUP_BUNDLE,
+	} semantics;
+};
+
 struct sdp_attribute {
 	str full_line,	/* including a= and \r\n */
 	    line_value,	/* without a= and without \r\n */
@@ -134,6 +141,8 @@ struct sdp_attribute {
 		ATTR_RECVONLY,
 		ATTR_RTCP_MUX,
 		ATTR_EXTMAP,
+		ATTR_GROUP,
+		ATTR_MID,
 	} attr;
 
 	union {
@@ -141,6 +150,7 @@ struct sdp_attribute {
 		struct attribute_candidate candidate;
 		struct attribute_crypto crypto;
 		struct attribute_ssrc ssrc;
+		struct attribute_group group;
 	} u;
 };
 
@@ -304,6 +314,16 @@ static void attrs_init(struct sdp_attributes *a) {
 			NULL, (GDestroyNotify) g_queue_free); */
 	a->id_lists_hash = g_hash_table_new_full(g_int_hash, g_int_equal,
 			NULL, (GDestroyNotify) g_queue_free);
+}
+
+static int parse_attribute_group(struct sdp_attribute *output) {
+	output->attr = ATTR_GROUP;
+
+	output->u.group.semantics = GROUP_OTHER;
+	if (output->value.len >= 7 && !strncmp(output->value.s, "BUNDLE ", 7))
+		output->u.group.semantics = GROUP_BUNDLE;
+
+	return 0;
 }
 
 static int parse_attribute_ssrc(struct sdp_attribute *output) {
@@ -507,11 +527,19 @@ static int parse_attribute(struct sdp_attribute *a) {
 
 	ret = 0;
 	switch (a->name.len) {
+		case 3:
+			if (!str_cmp(&a->name, "mid"))
+				a->attr = ATTR_MID;
+			break;
 		case 4:
 			if (!str_cmp(&a->name, "rtcp"))
 				ret = parse_attribute_rtcp(a);
 			else if (!str_cmp(&a->name, "ssrc"))
 				ret = parse_attribute_ssrc(a);
+			break;
+		case 5:
+			if (!str_cmp(&a->name, "group"))
+				ret = parse_attribute_group(a);
 			break;
 		case 6:
 			if (!str_cmp(&a->name, "crypto"))
@@ -1133,6 +1161,11 @@ static int process_session_attributes(struct sdp_chopper *chop, struct sdp_attri
 			case ATTR_SENDRECV:
 				goto strip;
 
+			case ATTR_GROUP:
+				if (attr->u.group.semantics == GROUP_BUNDLE)
+					goto strip;
+				break;
+
 			default:
 				break;
 		}
@@ -1149,11 +1182,12 @@ strip:
 	return 0;
 }
 
-static int process_media_attributes(struct sdp_chopper *chop, struct sdp_attributes *attrs,
+static int process_media_attributes(struct sdp_chopper *chop, struct sdp_media *sdp,
 		struct sdp_ng_flags *flags, struct call_media *media)
 {
 	GList *l;
-	struct sdp_attribute *attr;
+	struct sdp_attributes *attrs = &sdp->attributes;
+	struct sdp_attribute *attr, *a;
 
 	for (l = attrs->list.head; l; l = l->next) {
 		attr = l->data;
@@ -1175,6 +1209,12 @@ static int process_media_attributes(struct sdp_chopper *chop, struct sdp_attribu
 			case ATTR_RECVONLY:
 			case ATTR_SENDRECV:
 				goto strip;
+
+			case ATTR_MID:
+				a = attr_get_by_id(&sdp->session->attributes, ATTR_GROUP);
+				if (a && a->u.group.semantics == GROUP_BUNDLE)
+					goto strip;
+				break;
 
 			default:
 				break;
@@ -1410,7 +1450,7 @@ int sdp_replace(struct sdp_chopper *chop, GQueue *sessions, struct call_monologu
 					goto error;
 			}
 
-			if (process_media_attributes(chop, &sdp_media->attributes, flags, call_media))
+			if (process_media_attributes(chop, sdp_media, flags, call_media))
 				goto error;
 
 			copy_up_to_end_of(chop, &sdp_media->s);
