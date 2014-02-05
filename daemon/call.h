@@ -382,6 +382,13 @@ static inline void callmaster_exclude_port(struct callmaster *m, u_int16_t p) {
 	bit_array_set(m->ports_used, p);
 	mutex_unlock(&m->portlock);
 }
+static inline struct packet_stream *packet_stream_sink(struct packet_stream *ps) {
+	struct packet_stream *ret;
+	ret = ps->rtp_sink;
+	if (!ret)
+		ret = ps->rtcp_sink;
+	return ret;
+}
 
 
 #endif

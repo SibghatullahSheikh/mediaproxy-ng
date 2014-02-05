@@ -231,9 +231,7 @@ void kernelize(struct packet_stream *stream) {
 	mylog(LOG_DEBUG, LOG_PREFIX_C "Kernelizing media stream with local port %u",
 			LOG_PARAMS_C(call), stream->sfd->fd.localport);
 
-	sink = stream->rtp_sink;
-	if (!sink && stream->rtcp)
-		sink = stream->rtcp_sink;
+	sink = packet_stream_sink(stream);
 	if (!sink) {
 		mylog(LOG_WARNING, LOG_PREFIX_C "Attempt to kernelize stream without sink",
 				LOG_PARAMS_C(call));
@@ -955,10 +953,7 @@ static void callmaster_timer(void *ptr) {
 
 		update = 0;
 
-		/* XXX common piece of code */
-		sink = ps->rtp_sink;
-		if (!sink)
-			sink = ps->rtcp_sink;
+		sink = packet_stream_sink(ps);
 
 		if (sink)
 			mutex_lock(&sink->out_lock);
@@ -1183,7 +1178,6 @@ static struct call_media *__get_media(struct call_monologue *ml, GList **it, con
 	/* possible incremental update, hunt for correct media struct */
 	while (*it) {
 		med = (*it)->data;
-		/* XXX compare media type too? */
 		if (med->index == sp->index) {
 			DBG("found existing call_media for stream #%u", sp->index);
 			return med;
@@ -1742,9 +1736,7 @@ static csa_func __call_stream_address(struct packet_stream *ps, int variant) {
 	assert(variant < G_N_ELEMENTS(variants));
 
 	m = ps->call->callmaster;
-	sink = ps->rtp_sink;
-	if (!sink)
-		sink = ps->rtcp_sink;
+	sink = packet_stream_sink(ps);
 	sink_media = sink->media;
 
 	variants[0] = call_stream_address4;
@@ -1772,7 +1764,7 @@ done:
 int call_stream_address(char *o, struct packet_stream *ps, enum stream_address_format format, int *len) {
 	csa_func f;
 
-	ps = ps->rtcp_sink ? : ps->rtp_sink;
+	ps = packet_stream_sink(ps);
 	f = __call_stream_address(ps, 0);
 	return f(o, ps, format, len);
 }
@@ -1780,7 +1772,7 @@ int call_stream_address(char *o, struct packet_stream *ps, enum stream_address_f
 int call_stream_address_alt(char *o, struct packet_stream *ps, enum stream_address_format format, int *len) {
 	csa_func f;
 
-	ps = ps->rtcp_sink ? : ps->rtp_sink;
+	ps = packet_stream_sink(ps);
 	f = __call_stream_address(ps, 1);
 	return f ? f(o, ps, format, len) : -1;
 }
