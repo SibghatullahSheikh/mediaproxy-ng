@@ -1526,19 +1526,16 @@ int monologue_offer_answer(struct call_monologue *monologue, GQueue *streams,
 		__generate_crypto(media, other_media);
 
 		/* deduct address family from stream parameters received */
-		if (!other_media->desired_family) {
-			other_media->desired_family = AF_INET;
-			if (!IN6_IS_ADDR_V4MAPPED(&sp->rtp_endpoint.ip46))
-				other_media->desired_family = AF_INET6;
-		}
+		other_media->desired_family = AF_INET;
+		if (!IN6_IS_ADDR_V4MAPPED(&sp->rtp_endpoint.ip46))
+			other_media->desired_family = AF_INET6;
 		/* for outgoing SDP, use "direction"/DF or default to IPv4 (?) */
-		if (!media->desired_family) {
+		if (!media->desired_family)
 			media->desired_family = AF_INET;
-			if (sp->desired_family)
-				media->desired_family = sp->desired_family;
-			else if (sp->direction[1] == DIR_EXTERNAL)
-				media->desired_family = AF_INET6;
-		}
+		if (sp->desired_family)
+			media->desired_family = sp->desired_family;
+		else if (sp->direction[1] == DIR_EXTERNAL)
+			media->desired_family = AF_INET6;
 
 
 		/* determine number of consecutive ports needed locally.
