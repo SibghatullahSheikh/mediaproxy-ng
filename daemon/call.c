@@ -1407,7 +1407,7 @@ static void __init_streams(struct call_media *A, struct call_media *B, const str
 		ax->rtcp_sibling = a;
 
 		if (sp) {
-			if (sp->rtcp_endpoint.port) {
+			if (!sp->implicit_rtcp) {
 				__fill_stream(a, &sp->rtcp_endpoint, port_off);
 				a->implicit_rtcp = 0;
 			}
