@@ -1605,6 +1605,10 @@ static void call_destroy(struct call *c) {
 	struct poller *p = m->poller;
 	GSList *l;
 	int ret;
+	struct call_monologue *ml;
+	struct call_media *md;
+	GList *k, *o;
+	char buf[64];
 
 	rwlock_lock_w(&m->hashlock);
 	ret = g_hash_table_remove(m->callhash, &c->callid);
@@ -1621,28 +1625,41 @@ static void call_destroy(struct call *c) {
 	/* at this point, no more packet streams can be added */
 
 	mylog(LOG_INFO, LOG_PREFIX_C "Final packet stats:", LOG_PARAMS_C(c));
+
+	for (l = c->monologues; l; l = l->next) {
+		ml = l->data;
+		mylog(LOG_INFO, LOG_PREFIX_C "--- Tag '"STR_FORMAT"', created "
+				"%u:%02u ago, in dialogue with '"STR_FORMAT"'",
+				LOG_PARAMS_C(c),
+				STR_FMT(&ml->tag),
+				(unsigned int) (poller_now - ml->created) / 60,
+				(unsigned int) (poller_now - ml->created) % 60,
+				ml->active_dialogue ? ml->active_dialogue->tag.len : 6,
+				ml->active_dialogue ? ml->active_dialogue->tag.s : "(none)");
+
+		for (k = ml->medias.head; k; k = k->next) {
+			md = k->data;
+
+			for (o = md->streams.head; o; o = o->next) {
+				ps = o->data;
+
+				smart_ntop_p(buf, &ps->endpoint.ip46, sizeof(buf));
+				mylog(LOG_INFO, LOG_PREFIX_C "------ Media #%u, port %5u <> %15s:%-5hu%s, "
+						"%lu p, %lu b, %lu e",
+						LOG_PARAMS_C(c),
+						md->index,
+						(unsigned int) (ps->sfd ? ps->sfd->fd.localport : 0),
+						buf, ps->endpoint.port,
+						ps->rtcp ? " (RTCP)" : "",
+						ps->stats.packets,
+						ps->stats.bytes,
+						ps->stats.errors);
+			}
+		}
+	}
+
 	for (l = c->streams; l; l = l->next) {
 		ps = l->data;
-
-		/* XXX
-		mylog(LOG_INFO, LOG_PREFIX_C
-			"--- "
-			"side A: "
-			"RTP[%u] %lu p, %lu b, %lu e; "
-			"RTCP[%u] %lu p, %lu b, %lu e; "
-			"side B: "
-			"RTP[%u] %lu p, %lu b, %lu e; "
-			"RTCP[%u] %lu p, %lu b, %lu e",
-			LOG_PARAMS_C(c),
-			s->peers[0].rtps[0].fd.localport, s->peers[0].rtps[0].stats.packets,
-			s->peers[0].rtps[0].stats.bytes, s->peers[0].rtps[0].stats.errors,
-			s->peers[0].rtps[1].fd.localport, s->peers[0].rtps[1].stats.packets,
-			s->peers[0].rtps[1].stats.bytes, s->peers[0].rtps[1].stats.errors,
-			s->peers[1].rtps[0].fd.localport, s->peers[1].rtps[0].stats.packets,
-			s->peers[1].rtps[0].stats.bytes, s->peers[1].rtps[0].stats.errors,
-			s->peers[1].rtps[1].fd.localport, s->peers[1].rtps[1].stats.packets,
-			s->peers[1].rtps[1].stats.bytes, s->peers[1].rtps[1].stats.errors);
-		*/
 
 		unkernelize(ps);
 		ps->sfd = NULL;
