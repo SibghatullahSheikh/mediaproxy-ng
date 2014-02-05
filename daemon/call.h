@@ -172,7 +172,7 @@ struct call_media {
 				sdes_out;
 
 	GQueue			streams; /* normally RTP + RTCP */
-	GList			*endpoint_maps; /* singly linked list? XXX */
+	GSList			*endpoint_maps;
 
 	int			asymmetric:1;
 	int			send:1;
@@ -203,11 +203,11 @@ struct call {
 
 	/* everything below protected by master_lock */
 	rwlock_t		master_lock;
-	GList			*monologues;
+	GSList			*monologues;
 	GHashTable		*tags;	
 	//GHashTable		*branches;
-	GList			*streams;
-	GList			*stream_fds; /* XXX single linked list? */
+	GSList			*streams;
+	GSList			*stream_fds;
 
 	str			callid;	
 	char			redis_uuid[37];

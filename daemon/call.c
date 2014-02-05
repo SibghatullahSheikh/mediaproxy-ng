@@ -833,7 +833,7 @@ static void streams_free(GQueue *q) {
 static void call_timer_iterator(void *key, void *val, void *ptr) {
 	struct call *c = val;
 	struct iterator_helper *hlp = ptr;
-	GList *it;
+	GSList *it;
 	struct callmaster *cm;
 	unsigned int check;
 	int good = 0;
@@ -969,7 +969,7 @@ fault:
 
 void kill_calls_timer(GSList *list, struct callmaster *m) {
 	struct call *ca;
-	GList *csl;
+	GSList *csl;
 	struct call_monologue *cm;
 	const char *url;
 	struct xmlrpc_helper *xh = NULL;
@@ -1346,7 +1346,7 @@ static void stream_fd_free(void *p) {
 static struct endpoint_map *__get_endpoint_map(struct call_media *media, unsigned int num_ports,
 		const struct endpoint *ep)
 {
-	GList *l;
+	GSList *l;
 	struct endpoint_map *em;
 	struct udp_fd fd_arr[16];
 	unsigned int i;
@@ -1385,7 +1385,7 @@ static struct endpoint_map *__get_endpoint_map(struct call_media *media, unsigne
 	else
 		em->wildcard = 1;
 	g_queue_init(&em->sfds);
-	media->endpoint_maps = g_list_prepend(media->endpoint_maps, em);
+	media->endpoint_maps = g_slist_prepend(media->endpoint_maps, em);
 
 alloc:
 	if (num_ports > G_N_ELEMENTS(fd_arr))
@@ -1399,7 +1399,7 @@ alloc:
 		sfd->fd = fd_arr[i];
 		sfd->call = obj_get(call);
 		g_queue_push_tail(&em->sfds, sfd); /* not referenced */
-		call->stream_fds = g_list_prepend(call->stream_fds, sfd); /* hand over ref */
+		call->stream_fds = g_slist_prepend(call->stream_fds, sfd); /* hand over ref */
 
 		ZERO(pi);
 		pi.fd = sfd->fd.fd;
@@ -1454,7 +1454,7 @@ static int __num_media_streams(struct call_media *media, unsigned int num_ports)
 		stream->media = media;
 		stream->last_packet = poller_now;
 		g_queue_push_tail(&media->streams, stream);
-		call->streams = g_list_prepend(call->streams, stream);
+		call->streams = g_slist_prepend(call->streams, stream);
 		ret++;
 	}
 
@@ -1732,7 +1732,7 @@ static void call_destroy(struct call *c) {
 	struct packet_stream *ps;
 	struct stream_fd *sfd;
 	struct poller *p = m->poller;
-	GList *l;
+	GSList *l;
 	int ret;
 
 	rwlock_lock_w(&m->hashlock);
@@ -1783,7 +1783,7 @@ static void call_destroy(struct call *c) {
 
 	while (c->stream_fds) {
 		sfd = c->stream_fds->data;
-		c->stream_fds = g_list_delete_link(c->stream_fds, c->stream_fds);
+		c->stream_fds = g_slist_delete_link(c->stream_fds, c->stream_fds);
 		poller_del_item(p, sfd->fd.fd);
 		obj_put(sfd);
 	}
@@ -1972,7 +1972,7 @@ static void __call_free(void *p) {
 
 	while (c->monologues) {
 		m = c->monologues->data;
-		c->monologues = g_list_delete_link(c->monologues, c->monologues);
+		c->monologues = g_slist_delete_link(c->monologues, c->monologues);
 
 		g_hash_table_destroy(m->other_tags);
 
@@ -1981,7 +1981,7 @@ static void __call_free(void *p) {
 			g_queue_clear(&md->streams);
 			while (md->endpoint_maps) {
 				em = md->endpoint_maps->data;
-				md->endpoint_maps = g_list_delete_link(md->endpoint_maps, md->endpoint_maps);
+				md->endpoint_maps = g_slist_delete_link(md->endpoint_maps, md->endpoint_maps);
 				g_queue_clear(&em->sfds);
 				g_slice_free1(sizeof(*em), em);
 			}
@@ -1996,7 +1996,7 @@ static void __call_free(void *p) {
 
 	while (c->streams) {
 		ps = c->streams->data;
-		c->streams = g_list_delete_link(c->streams, c->streams);
+		c->streams = g_slist_delete_link(c->streams, c->streams);
 		g_slice_free1(sizeof(*ps), ps);
 	}
 
@@ -2087,7 +2087,7 @@ static struct call_monologue *__monologue_create(struct call *call) {
 	ret->other_tags = g_hash_table_new(str_hash, str_equal);
 	g_queue_init(&ret->medias);
 
-	call->monologues = g_list_prepend(call->monologues, ret);
+	call->monologues = g_slist_prepend(call->monologues, ret);
 
 	return ret;
 }
@@ -2472,48 +2472,50 @@ static void stats_query(struct call *call, const str *fromtag, const str *totag,
 	const str *match_tag;
 	struct call_monologue *ml;
 	struct call_media *media;
-	GList *l, *m_l = NULL;
+	GList *l, *k;
+	GSList *ml_l;
 	struct packet_stream *stream;
 
 	ZERO(*stats);
 
 	match_tag = (totag && totag->s && totag->len) ? totag : fromtag;
-	if (!match_tag)
-		l = call->streams;
-	else {
-		ml = g_hash_table_lookup(call->tags, match_tag);
-		if (!ml)
+	if (!match_tag) {
+		ml_l = call->monologues;
+		if (!ml_l)
 			goto out;
-		m_l = ml->medias.head;
-
-m_l_restart:
-		if (!m_l)
-			goto out;
-		media = m_l->data;
-		l = media->streams.head;
+		ml = ml_l->data;
 	}
+	else
+		ml = g_hash_table_lookup(call->tags, match_tag);
 
-	while (l) {
-		stream = l->data;
+	while (ml) {
+		l = ml->medias.head;
+		for (l = ml->medias.head; l; l = l->next) {
+			media = l->data;
 
-		if (stream->last_packet > stats->newest)
-			stats->newest = stream->last_packet;
+			for (k = media->streams.head; k; k = k->next) {
+				stream = k->data;
 
-		if (cb)
-			cb(stream, arg);
+				if (stream->last_packet > stats->newest)
+					stats->newest = stream->last_packet;
 
-		SSUM(packets);
-		SSUM(bytes);
-		SSUM(errors);
+				if (cb)
+					cb(stream, arg);
 
-		/* XXX more meaningful stats */
+				SSUM(packets);
+				SSUM(bytes);
+				SSUM(errors);
 
-		l = l->next;
-
-		if (!l && m_l) {
-			m_l = m_l->next;
-			goto m_l_restart;
+				/* XXX more meaningful stats */
+			}
 		}
+
+		if (!ml_l)
+			break;
+		ml_l = ml_l->next;
+		if (!ml_l)
+			break;
+		ml = ml_l->data;
 	}
 
 out:
