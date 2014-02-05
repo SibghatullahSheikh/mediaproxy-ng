@@ -11,6 +11,7 @@
 #include "str.h"
 #include "call.h"
 #include "crypto.h"
+#include "dtls.h"
 
 struct network_address {
 	str network_type;
@@ -119,6 +120,14 @@ struct attribute_group {
 	} semantics;
 };
 
+struct attribute_fingerprint {
+	str hash_func_str;
+	str fingerprint_str;
+
+	const struct dtls_hash_func *hash_func;
+	unsigned char fingerprint[64];
+};
+
 struct sdp_attribute {
 	str full_line,	/* including a= and \r\n */
 	    line_value,	/* without a= and without \r\n */
@@ -143,6 +152,7 @@ struct sdp_attribute {
 		ATTR_EXTMAP,
 		ATTR_GROUP,
 		ATTR_MID,
+		ATTR_FINGERPRINT,
 	} attr;
 
 	union {
@@ -151,6 +161,7 @@ struct sdp_attribute {
 		struct attribute_crypto crypto;
 		struct attribute_ssrc ssrc;
 		struct attribute_group group;
+		struct attribute_fingerprint fingerprint;
 	} u;
 };
 
@@ -513,6 +524,56 @@ static int parse_attribute_candidate(struct sdp_attribute *output) {
 	return 0;
 }
 
+static int parse_attribute_fingerprint(struct sdp_attribute *output) {
+	char *end, *start;
+	unsigned char *c;
+	int i;
+
+	start = output->value.s;
+	end = start + output->value.len;
+	output->attr = ATTR_FINGERPRINT;
+
+	EXTRACT_TOKEN(u.fingerprint.hash_func_str);
+	EXTRACT_TOKEN(u.fingerprint.fingerprint_str);
+
+	output->u.fingerprint.hash_func = dtls_find_hash_func(&output->u.fingerprint.hash_func_str);
+	if (!output->u.fingerprint.hash_func)
+		return -1;
+
+	assert(sizeof(output->u.fingerprint.fingerprint) >= output->u.fingerprint.hash_func->num_bytes);
+
+	c = (unsigned char *) output->u.fingerprint.fingerprint_str.s;
+	for (i = 0; i < output->u.fingerprint.hash_func->num_bytes; i++) {
+		if (c[0] >= '0' && c[0] <= '9')
+			output->u.fingerprint.fingerprint[i] = c[0] - '0';
+		else if (c[0] >= 'a' && c[0] <= 'f')
+			output->u.fingerprint.fingerprint[i] = c[0] - 'a' + 10;
+		else if (c[0] >= 'A' && c[0] <= 'F')
+			output->u.fingerprint.fingerprint[i] = c[0] - 'A' + 10;
+		else
+			return -1;
+
+		if (c[1] >= '0' && c[1] <= '9')
+			output->u.fingerprint.fingerprint[i] = c[1] - '0';
+		else if (c[1] >= 'a' && c[1] <= 'f')
+			output->u.fingerprint.fingerprint[i] = c[1] - 'a' + 10;
+		else if (c[1] >= 'A' && c[1] <= 'F')
+			output->u.fingerprint.fingerprint[i] = c[1] - 'A' + 10;
+		else
+			return -1;
+
+		if (c[2] != ':')
+			break;
+
+		c += 3;
+	}
+
+	if (i != output->u.fingerprint.hash_func->num_bytes)
+		return -1;
+
+	return 0;
+}
+
 static int parse_attribute(struct sdp_attribute *a) {
 	int ret;
 
@@ -596,6 +657,8 @@ static int parse_attribute(struct sdp_attribute *a) {
 		case 11:
 			if (!str_cmp(&a->name, "ice-options"))
 				a->attr = ATTR_ICE;
+			else if (!str_cmp(&a->name, "fingerprint"))
+				ret = parse_attribute_fingerprint(a);
 			break;
 		case 12:
 			if (!str_cmp(&a->name, "ice-mismatch"))
