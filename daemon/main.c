@@ -490,7 +490,7 @@ void create_everything(struct main_context *ctx) {
 			die("Cannot start up without Redis database\n");
 	}
 
-	callmaster_config(ctx->m, &mc);
+	ctx->m->conf = mc;
 
 	if (!foreground)
 		daemonize();

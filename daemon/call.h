@@ -9,38 +9,6 @@
 #include <time.h>
 #include <pcre.h>
 
-#include "control_tcp.h"
-#include "control_udp.h"
-#include "obj.h"
-#include "aux.h"
-#include "bencode.h"
-#include "str.h"
-#include "crypto.h"
-
-
-
-#define MAX_RTP_PACKET_SIZE	8192
-#define RTP_BUFFER_HEAD_ROOM	128
-#define RTP_BUFFER_TAIL_ROOM	256
-#define RTP_BUFFER_SIZE		(MAX_RTP_PACKET_SIZE + RTP_BUFFER_HEAD_ROOM + RTP_BUFFER_TAIL_ROOM)
-
-
-
-struct poller;
-struct control_stream;
-struct call;
-struct callmaster;
-struct redis;
-struct crypto_suite;
-struct mediaproxy_srtp;
-struct streamhandler;
-
-
-typedef bencode_buffer_t call_buffer_t;
-#define call_buffer_alloc bencode_buffer_alloc
-#define call_buffer_init bencode_buffer_init
-#define call_buffer_free bencode_buffer_free
-
 
 
 
@@ -70,6 +38,59 @@ enum transport_protocol {
 
 	__PROTO_LAST
 };
+
+struct call_monologue;
+
+
+
+
+#include "control_tcp.h"
+#include "control_udp.h"
+#include "obj.h"
+#include "aux.h"
+#include "bencode.h"
+#include "str.h"
+#include "crypto.h"
+
+
+
+#define MAX_RTP_PACKET_SIZE	8192
+#define RTP_BUFFER_HEAD_ROOM	128
+#define RTP_BUFFER_TAIL_ROOM	256
+#define RTP_BUFFER_SIZE		(MAX_RTP_PACKET_SIZE + RTP_BUFFER_HEAD_ROOM + RTP_BUFFER_TAIL_ROOM)
+
+#define LOG_PREFIX_C "["STR_FORMAT"] "
+#define LOG_PREFIX_CI "["STR_FORMAT"] "
+#define LOG_PARAMS_C(c) STR_FMT(&(c)->callid)
+#define LOG_PARAMS_CI(c) STR_FMT(&(c)->callid)
+
+#ifdef __DEBUG
+#define DBG(x...) mylog(LOG_DEBUG, x)
+#else
+#define DBG(x...) ((void)0)
+#endif
+
+
+
+
+struct poller;
+struct control_stream;
+struct call;
+struct redis;
+struct crypto_suite;
+struct mediaproxy_srtp;
+struct streamhandler;
+struct sdp_ng_flags;
+
+
+typedef bencode_buffer_t call_buffer_t;
+#define call_buffer_alloc bencode_buffer_alloc
+#define call_buffer_init bencode_buffer_init
+#define call_buffer_free bencode_buffer_free
+
+
+
+
 extern const char *transport_protocol_strings[__PROTO_LAST];
 
 struct stats {
@@ -231,15 +252,40 @@ struct callmaster_config {
 	unsigned char		tos;
 };
 
-struct callmaster;
+struct callmaster {
+	struct obj		obj;
+
+	rwlock_t		hashlock;
+	GHashTable		*callhash;
+
+	mutex_t			portlock;
+	u_int16_t		lastport;
+	BIT_ARRAY_DECLARE(ports_used, 0x10000);
+
+	mutex_t			statspslock;
+	struct stats		statsps;	/* per second stats, running timer */
+	mutex_t			statslock;
+	struct stats		stats;		/* copied from statsps once a second */
+
+	struct poller		*poller;
+	pcre			*info_re;
+	pcre_extra		*info_ree;
+	pcre			*streams_re;
+	pcre_extra		*streams_ree;
+
+	struct callmaster_config conf;
+};
+
+struct call_stats {
+	time_t		newest;
+	struct stats	totals[4]; /* rtp in, rtcp in, rtp out, rtcp out */
+};
 
 
 
 struct callmaster *callmaster_new(struct poller *);
-void callmaster_config(struct callmaster *m, struct callmaster_config *c);
-void callmaster_exclude_port(struct callmaster *m, u_int16_t p);
-int callmaster_has_ipv6(struct callmaster *);
 void callmaster_msg_mh_src(struct callmaster *, struct msghdr *);
+void callmaster_get_all_calls(struct callmaster *m, GQueue *q);
 
 
 str *call_request_tcp(char **, struct callmaster *);
@@ -261,7 +307,14 @@ const char *call_query_ng(bencode_item_t *, struct callmaster *, bencode_item_t 
 void calls_dump_redis(struct callmaster *);
 
 struct call *call_get_or_create(const str *callid, struct callmaster *m);
-struct callstream *callstream_new(struct call *ca, int num);
+struct call *call_get_opmode(const str *callid, struct callmaster *m, enum call_opmode opmode);
+struct call_monologue *call_get_mono_dialogue(struct call *call, const str *fromtag, const str *totag);
+int monologue_offer_answer(struct call_monologue *monologue, GQueue *streams, struct sdp_ng_flags *flags);
+int call_delete_branch(struct callmaster *m, const str *callid, const str *branch,
+	const str *fromtag, const str *totag, bencode_item_t *output);
+void stats_query(struct call *call, const str *fromtag, const str *totag, struct call_stats *stats,
+	void (*cb)(struct packet_stream *, void *), void *arg);
+
 void kernelize(struct packet_stream *);
 int call_stream_address_alt(char *, struct packet_stream *, enum stream_address_format, int *);
 int call_stream_address(char *, struct packet_stream *, enum stream_address_format, int *);
@@ -318,7 +371,15 @@ static inline str *call_str_init_dup(struct call *c, char *s) {
 	str_init(&t, s);
 	return call_str_dup(c, &t);
 }
-
+static inline int callmaster_has_ipv6(struct callmaster *m) {
+	return is_addr_unspecified(&m->conf.ipv6) ? 0 : 1;
+}
+static inline void callmaster_exclude_port(struct callmaster *m, u_int16_t p) {
+	/* XXX atomic bit field? */
+	mutex_lock(&m->portlock);
+	bit_array_set(m->ports_used, p);
+	mutex_unlock(&m->portlock);
+}
 
 
 #endif
