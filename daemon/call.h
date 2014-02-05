@@ -124,6 +124,7 @@ struct stream_params {
 	int			rtcp_mux:1;
 	int			send:1;
 	int			recv:1;
+	int			asymmetric:1;
 };
 
 struct stream_fd {

@@ -852,6 +852,7 @@ int sdp_streams(const GQueue *sessions, GQueue *streams, struct sdp_ng_flags *fl
 			sp->type = media->media_type;
 			memcpy(sp->direction, flags->directions, sizeof(sp->direction));
 			sp->desired_family = flags->address_family;
+			sp->asymmetric = flags->asymmetric;
 
 			attr = attr_get_by_id(&media->attributes, ATTR_CRYPTO);
 			if (attr) {

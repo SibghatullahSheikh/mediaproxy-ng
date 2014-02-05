@@ -1519,6 +1519,7 @@ int monologue_offer_answer(struct call_monologue *monologue, GQueue *streams,
 		other_media->rtcp_mux = sp->rtcp_mux;
 		other_media->sdes_in.params = sp->crypto;
 		other_media->sdes_in.tag = sp->sdes_tag;
+		other_media->asymmetric = sp->asymmetric;
 
 		other_media->recv = media->send = sp->send;
 		other_media->send = media->recv = sp->recv;
