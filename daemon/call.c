@@ -2113,7 +2113,7 @@ void stats_query(struct call *call, const str *fromtag, const str *totag, struct
 	struct call_monologue *ml;
 	struct call_media *media;
 	GList *l, *k;
-	GSList *ml_l;
+	GSList *ml_l = NULL;
 	struct packet_stream *stream;
 
 	ZERO(*stats);
