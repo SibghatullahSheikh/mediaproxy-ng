@@ -801,15 +801,7 @@ static int fill_endpoint(struct endpoint *ep, const struct sdp_media *media, str
 		struct network_address *address, long int port) {
 	struct sdp_session *session = media->session;
 
-	if (flags->media_address.s) {
-		if (is_addr_unspecified(&flags->parsed_media_address)) {
-			if (__parse_address(&flags->parsed_media_address, NULL, NULL,
-						&flags->media_address))
-				return -1;
-		}
-		ep->ip46 = flags->parsed_media_address;
-	}
-	else if (!flags->trust_address) {
+	if (!flags->trust_address) {
 		if (is_addr_unspecified(&flags->parsed_received_from)) {
 			if (__parse_address(&flags->parsed_received_from, NULL, &flags->received_from_family,
 						&flags->received_from_address))
@@ -1111,6 +1103,9 @@ static int replace_network_address(struct sdp_chopper *chop, struct network_addr
 	if (copy_up_to(chop, &address->address_type))
 		return -1;
 
+	if (flags->media_address.s && is_addr_unspecified(&flags->parsed_media_address))
+		__parse_address(&flags->parsed_media_address, NULL, NULL, &flags->media_address);
+
 	if (!is_addr_unspecified(&flags->parsed_media_address)) {
 		if (IN6_IS_ADDR_V4MAPPED(&flags->parsed_media_address))
 			len = sprintf(buf, "IP4 " IPF, IPP(flags->parsed_media_address.s6_addr32[3]));
@@ -1389,13 +1384,6 @@ int sdp_replace(struct sdp_chopper *chop, GQueue *sessions, struct call_monologu
 	m = monologue->medias.head;
 	do_ice = (flags->ice_force || (!has_ice(sessions) && !flags->ice_remove)) ? 1 : 0;
 	call = monologue->call;
-	if (flags->media_address.s) {
-		if (is_addr_unspecified(&flags->parsed_media_address)) {
-			if (__parse_address(&flags->parsed_media_address, NULL, NULL,
-						&flags->media_address))
-				return -1;
-		}
-	}
 
 	for (l = sessions->head; l; l = l->next) {
 		session = l->data;

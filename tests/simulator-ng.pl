@@ -782,7 +782,7 @@ a=rtpmap:8 PCMA/8000
 		$$dict{'transport protocol'} = $$tr_o{name};
 	}
 
-	print(Dumper($dict) . "\n\n");
+	#print(Dumper($dict) . "\n\n");
 	my $o = msg($dict);
 
 	$$o{result} eq 'ok' or die;
