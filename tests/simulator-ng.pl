@@ -16,7 +16,7 @@ use Data::Dumper;
 
 my ($NUM, $RUNTIME, $STREAMS, $PAYLOAD, $INTERVAL, $RTCP_INTERVAL, $STATS_INTERVAL)
 	= (1000, 30, 1, 160, 20, 5, 5);
-my ($NODEL, $IP, $IPV6, $KEEPGOING, $REINVITES, $PROTOS, $DEST, $SUITES, $NOENC, $RTCPMUX, $BUNDLE);
+my ($NODEL, $IP, $IPV6, $KEEPGOING, $REINVITES, $PROTOS, $DEST, $SUITES, $NOENC, $RTCPMUX, $BUNDLE, $LAZY);
 GetOptions(
 		'no-delete'	=> \$NODEL,
 		'num-calls=i'	=> \$NUM,
@@ -36,6 +36,7 @@ GetOptions(
 		'no-encrypt'	=> \$NOENC,
 		'rtcp-mux'	=> \$RTCPMUX,
 		'bundle'	=> \$BUNDLE,
+		'lazy-params'	=> \$LAZY,
 ) or die;
 
 ($IP || $IPV6) or die("at least one of --local-ip or --local-ipv6 must be given");
@@ -759,18 +760,29 @@ a=rtpmap:8 PCMA/8000
 	#print("sdp $op in:\n$sdp\n\n");
 
 	my $dict = {sdp => $sdp, command => $op, 'call-id' => $$c{callid},
-		'from-tag' => $$A{tag},
 		flags => [ 'trust address' ],
 		replace => [ 'origin', 'session connection' ],
 		#direction => [ $$pr{direction}, $$pr_o{direction} ],
-		'address family' => $$pr_o{family_str},
 		'received from' => [ qw(IP4 127.0.0.1) ],
-		'transport-protocol' => $$tr_o{name},
 	};
 	#$viabranch and $dict->{'via-branch'} = $viabranch;
-	$op eq 'answer' and $dict->{'from-tag'} = $$B{tag},
-				$dict->{'to-tag'} = $$A{tag};
+	if ($op eq 'offer') {
+		$dict->{'from-tag'} = $$A{tag};
+		rand() > .5 and $$dict{'to-tag'} = $$B{tag};
+	}
+	elsif ($op eq 'answer') {
+		$dict->{'from-tag'} = $$B{tag},
+		$dict->{'to-tag'} = $$A{tag};
+	}
+	if (!$LAZY
+		|| ($op eq 'offer' && !$$c{established})
+		|| (rand() > .5))
+	{
+		$$dict{'address family'} = $$pr_o{family_str};
+		$$dict{'transport protocol'} = $$tr_o{name};
+	}
 
+	print(Dumper($dict) . "\n\n");
 	my $o = msg($dict);
 
 	$$o{result} eq 'ok' or die;
@@ -810,6 +822,8 @@ a=rtpmap:8 PCMA/8000
 	}
 	$$tr_o{sdp_parse_func} and $$tr_o{sdp_parse_func}($$o{sdp}, $tcx_o, $tcx);
 	#print(Dumper($op, $A, $B) . "\n\n\n\n");
+
+	$op eq 'answer' and $$c{established} = 1;
 }
 
 sub offer {
