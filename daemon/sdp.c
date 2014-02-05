@@ -187,8 +187,24 @@ static inline int inet_pton_str(int af, str *src, void *dst) {
 	return ret;
 }
 
+int address_family(const str *s) {
+	if (s->len != 3)
+		return 0;
+
+	if (!memcmp(s->s, "IP4", 3)
+			|| !memcmp(s->s, "ip4", 3))
+		return AF_INET;
+
+	if (!memcmp(s->s, "IP6", 3)
+			|| !memcmp(s->s, "ip6", 3))
+		return AF_INET6;
+
+	return 0;
+}
+
 static int __parse_address(struct in6_addr *out, str *network_type, str *address_type, str *address) {
 	struct in_addr in4;
+	int af;
 
 	if (network_type) {
 		if (network_type->len != 2)
@@ -206,17 +222,15 @@ static int __parse_address(struct in6_addr *out, str *network_type, str *address
 		return -1;
 	}
 
-	if (address_type->len != 3)
-		return -1;
-	if (!memcmp(address_type->s, "IP4", 3)
-			|| !memcmp(address_type->s, "ip4", 3)) {
+	af = address_family(address_type);
+
+	if (af == AF_INET) {
 		if (inet_pton_str(AF_INET, address, &in4) != 1)
 			return -1;
 ip4:
 		in4_to_6(out, in4.s_addr);
 	}
-	else if (!memcmp(address_type->s, "IP6", 3)
-			|| !memcmp(address_type->s, "ip6", 3)) {
+	else if (af == AF_INET6) {
 		if (inet_pton_str(AF_INET6, address, out) != 1)
 			return -1;
 	}
@@ -845,6 +859,7 @@ int sdp_streams(const GQueue *sessions, GQueue *streams, struct sdp_ng_flags *fl
 			sp->protocol = transport_protocol(&media->transport);
 			sp->type = media->media_type;
 			memcpy(sp->direction, flags->directions, sizeof(sp->direction));
+			sp->desired_family = flags->address_family;
 
 			attr = attr_get_by_id(&media->attributes, ATTR_CRYPTO);
 			if (attr) {

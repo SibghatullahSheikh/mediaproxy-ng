@@ -7,15 +7,16 @@
 
 
 struct sdp_ng_flags {
-	int desired_family[2];
 	str received_from_family;
 	str received_from_address;
 	str media_address;
 	str transport_protocol_str;
+	str address_family_str;
 	enum transport_protocol transport_protocol;
 	struct in6_addr parsed_received_from;
 	struct in6_addr parsed_media_address;
 	enum stream_direction directions[2];
+	int address_family;
 	int asymmetric:1,
 	    symmetric:1,
 	    trust_address:1,
@@ -44,5 +45,7 @@ int sdp_replace(struct sdp_chopper *, GQueue *, struct call_monologue *, struct 
 
 struct sdp_chopper *sdp_chopper_new(str *input);
 void sdp_chopper_destroy(struct sdp_chopper *chop);
+
+int address_family(const str *s);
 
 #endif

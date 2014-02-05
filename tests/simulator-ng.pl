@@ -760,10 +760,11 @@ a=rtpmap:8 PCMA/8000
 
 	my $dict = {sdp => $sdp, command => $op, 'call-id' => $$c{callid},
 		'from-tag' => $$A{tag},
-		flags => [ qw( trust-address ) ],
-		replace => [ qw( origin session-connection ) ],
-		direction => [ $$pr{direction}, $$pr_o{direction} ],
-		'received-from' => [ qw(IP4 127.0.0.1) ],
+		flags => [ 'trust address' ],
+		replace => [ 'origin', 'session connection' ],
+		#direction => [ $$pr{direction}, $$pr_o{direction} ],
+		'address family' => $$pr_o{family_str},
+		'received from' => [ qw(IP4 127.0.0.1) ],
 		'transport-protocol' => $$tr_o{name},
 	};
 	#$viabranch and $dict->{'via-branch'} = $viabranch;

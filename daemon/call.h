@@ -117,6 +117,7 @@ struct stream_params {
 	struct crypto_params	crypto;
 	unsigned int		sdes_tag;
 	enum stream_direction	direction[2];
+	int			desired_family;
 
 	int			no_rtcp:1;
 	int			implicit_rtcp:1;

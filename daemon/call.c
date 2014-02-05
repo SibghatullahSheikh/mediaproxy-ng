@@ -1531,10 +1531,12 @@ int monologue_offer_answer(struct call_monologue *monologue, GQueue *streams,
 			if (!IN6_IS_ADDR_V4MAPPED(&sp->rtp_endpoint.ip46))
 				other_media->desired_family = AF_INET6;
 		}
-		/* for outgoing SDP, use "direction" or default to IPv4 (?) */
+		/* for outgoing SDP, use "direction"/DF or default to IPv4 (?) */
 		if (!media->desired_family) {
 			media->desired_family = AF_INET;
-			if (sp->direction[1] == DIR_EXTERNAL)
+			if (sp->desired_family)
+				media->desired_family = sp->desired_family;
+			else if (sp->direction[1] == DIR_EXTERNAL)
 				media->desired_family = AF_INET6;
 		}
 

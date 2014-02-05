@@ -434,7 +434,6 @@ static void call_ng_process_flags(struct sdp_ng_flags *out, bencode_item_t *inpu
 		}
 	}
 
-	/* XXX convert to a "desired-family" kinda thing instead */
 	diridx = 0;
 	if ((list = bencode_dictionary_get_expect(input, "direction", BENCODE_LIST))) {
 		for (it = list->child; it && diridx < 2; it = it->sibling) {
@@ -465,6 +464,8 @@ static void call_ng_process_flags(struct sdp_ng_flags *out, bencode_item_t *inpu
 		bencode_dictionary_get_str(input, "transport-protocol", &out->transport_protocol_str);
 	out->transport_protocol = transport_protocol(&out->transport_protocol_str);
 	bencode_dictionary_get_str(input, "media address", &out->media_address);
+	if (bencode_dictionary_get_str(input, "address family", &out->address_family_str))
+		out->address_family = address_family(&out->address_family_str);
 }
 
 static const char *call_offer_answer_ng(bencode_item_t *input, struct callmaster *m,
