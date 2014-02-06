@@ -22,6 +22,7 @@
 #include "kernel.h"
 #include "redis.h"
 #include "sdp.h"
+#include "dtls.h"
 
 
 
@@ -361,6 +362,7 @@ static void init_everything() {
 	signals();
 	resources();
 	sdp_init();
+	dtls_init();
 }
 
 void redis_mod_verify(void *dlh) {
