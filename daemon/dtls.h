@@ -8,6 +8,15 @@
 
 
 
+enum setup_value {
+	SETUP_UNKNOWN = 0,
+	SETUP_ACTPASS,
+	SETUP_ACTIVE,
+	SETUP_PASSIVE,
+	SETUP_HOLDCONN,
+};
+
+
 struct dtls_hash_func {
 	const char *name;
 	unsigned int num_bytes;

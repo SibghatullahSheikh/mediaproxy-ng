@@ -128,6 +128,11 @@ struct attribute_fingerprint {
 	unsigned char fingerprint[64];
 };
 
+struct attribute_setup {
+	str s;
+	enum setup_value value;
+};
+
 struct sdp_attribute {
 	str full_line,	/* including a= and \r\n */
 	    line_value,	/* without a= and without \r\n */
@@ -153,6 +158,7 @@ struct sdp_attribute {
 		ATTR_GROUP,
 		ATTR_MID,
 		ATTR_FINGERPRINT,
+		ATTR_SETUP,
 	} attr;
 
 	union {
@@ -162,6 +168,7 @@ struct sdp_attribute {
 		struct attribute_ssrc ssrc;
 		struct attribute_group group;
 		struct attribute_fingerprint fingerprint;
+		struct attribute_setup setup;
 	} u;
 };
 
@@ -574,6 +581,21 @@ static int parse_attribute_fingerprint(struct sdp_attribute *output) {
 	return 0;
 }
 
+static int parse_attribute_setup(struct sdp_attribute *output) {
+	output->attr = ATTR_SETUP;
+
+	if (!str_cmp(&output->value, "actpass"))
+		output->u.setup.value = SETUP_ACTPASS;
+	else if (!str_cmp(&output->value, "active"))
+		output->u.setup.value = SETUP_ACTIVE;
+	else if (!str_cmp(&output->value, "passive"))
+		output->u.setup.value = SETUP_PASSIVE;
+	else if (!str_cmp(&output->value, "holdconn"))
+		output->u.setup.value = SETUP_HOLDCONN;
+
+	return 0;
+}
+
 static int parse_attribute(struct sdp_attribute *a) {
 	int ret;
 
@@ -615,11 +637,13 @@ static int parse_attribute(struct sdp_attribute *a) {
 		case 5:
 			if (!str_cmp(&a->name, "group"))
 				ret = parse_attribute_group(a);
+			else if (!str_cmp(&a->name, "setup"))
+				ret = parse_attribute_setup(a);
 			break;
 		case 6:
 			if (!str_cmp(&a->name, "crypto"))
 				ret = parse_attribute_crypto(a);
-			if (!str_cmp(&a->name, "extmap"))
+			else if (!str_cmp(&a->name, "extmap"))
 				a->attr = ATTR_EXTMAP;
 			break;
 		case 7:
