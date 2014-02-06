@@ -1996,17 +1996,20 @@ static struct call_monologue *call_get_monologue(struct call *call, const str *f
 
 /* must be called with call->master_lock held in W */
 static struct call_monologue *call_get_dialogue(struct call *call, const str *fromtag, const str *totag) {
-	struct call_monologue *ft, *ret;
+	struct call_monologue *ft, *ret, *tt;
 
 	DBG("getting dialogue for tags '"STR_FORMAT"'<>'"STR_FORMAT"' in call '"STR_FORMAT"'",
 			STR_FMT(fromtag), STR_FMT(totag), STR_FMT(&call->callid));
 	/* if the to-tag is known already, return that */
-	ret = g_hash_table_lookup(call->tags, totag);
-	if (ret) {
+	tt = g_hash_table_lookup(call->tags, totag);
+	if (tt) {
 		DBG("found existing dialogue");
-		__monologue_unkernelize(ret);
-		__monologue_unkernelize(ret->active_dialogue);
-		return ret;
+		__monologue_unkernelize(tt);
+		__monologue_unkernelize(tt->active_dialogue);
+
+		/* make sure that the dialogue is actually intact */
+		if (!str_cmp_str(fromtag, &tt->active_dialogue->tag))
+			return tt;
 	}
 
 	/* otherwise, at least the from-tag has to be known. it's an error if it isn't */
@@ -2023,16 +2026,22 @@ static struct call_monologue *call_get_dialogue(struct call *call, const str *fr
 	if (!ret->tag.s)
 		goto tag;
 
+	/* we may have seen both tags previously and they just need to be linked up */
+	if (tt) {
+		ret = tt;
+		goto link;
+	}
+
 	/* this is an additional dialogue created from a single from-tag */
 	ret = __monologue_create(call);
 
 tag:
 	__monologue_tag(ret, totag);
+link:
 	g_hash_table_insert(ret->other_tags, &ft->tag, ft);
 	g_hash_table_insert(ft->other_tags, &ret->tag, ret);
 	ret->active_dialogue = ft;
 	ft->active_dialogue = ret;
-	/* XXX possible asymmetric dialogue? */
 
 	return ret;
 }
