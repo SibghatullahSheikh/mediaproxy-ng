@@ -1921,6 +1921,12 @@ static void __monologue_tag(struct call_monologue *ml, const str *tag) {
 	g_hash_table_insert(call->tags, &ml->tag, ml);
 }
 
+static void __stream_unkernelize(struct packet_stream *ps) {
+	unkernelize(ps);
+	ps->confirmed = 0;
+	ps->has_handler = 0;
+}
+
 /* must be called with call->master_lock held in W */
 static void __monologue_unkernelize(struct call_monologue *monologue) {
 	GList *l, *m;
@@ -1935,9 +1941,11 @@ static void __monologue_unkernelize(struct call_monologue *monologue) {
 
 		for (m = media->streams.head; m; m = m->next) {
 			stream = m->data;
-			unkernelize(stream);
-			stream->confirmed = 0;
-			stream->has_handler = 0;
+			__stream_unkernelize(stream);
+			if (stream->rtp_sink)
+				__stream_unkernelize(stream->rtp_sink);
+			if (stream->rtcp_sink)
+				__stream_unkernelize(stream->rtcp_sink);
 		}
 	}
 }
