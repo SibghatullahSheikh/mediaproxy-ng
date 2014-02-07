@@ -46,7 +46,7 @@ struct mediaproxy_srtp {
 	enum mediaproxy_hmac		hmac;
 	unsigned char			master_key[16];
 	unsigned char			master_salt[14];
-	u_int64_t			mki;
+	unsigned char			mki[256]; /* XXX uses too much memory? */
 	u_int64_t			last_index;
 	unsigned int			auth_tag_len; /* in bytes */
 	unsigned int			mki_len;

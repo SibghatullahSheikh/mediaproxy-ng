@@ -44,6 +44,7 @@ struct crypto_suite {
 	hash_func_rtcp hash_rtcp;
 	session_key_init_func session_key_init;
 	session_key_cleanup_func session_key_cleanup;
+	const char *dtls_profile_code;
 };
 
 struct crypto_params {
@@ -51,7 +52,7 @@ struct crypto_params {
 	/* we only support one master key for now */
 	char master_key[16];
 	char master_salt[14];
-	u_int64_t mki;
+	unsigned char *mki;
 	unsigned int mki_len;
 };
 
@@ -105,20 +106,37 @@ static inline int crypto_decrypt_rtcp(struct crypto_context *c, struct rtcp_pack
 static inline int crypto_init_session_key(struct crypto_context *c) {
 	return c->params.crypto_suite->session_key_init(c);
 }
+
+static inline void crypto_params_cleanup(struct crypto_params *p) {
+	if (p->mki)
+		free(p->mki);
+	p->mki = NULL;
+}
 static inline void crypto_cleanup(struct crypto_context *c) {
 	if (!c->params.crypto_suite)
 		return;
 	if (c->params.crypto_suite->session_key_cleanup)
 		c->params.crypto_suite->session_key_cleanup(c);
 	c->have_session_key = 0;
+	crypto_params_cleanup(&c->params);
 }
 static inline void crypto_reset(struct crypto_context *c) {
 	crypto_cleanup(c);
 	c->last_index = 0;
 }
+static inline void crypto_params_copy(struct crypto_params *o, const struct crypto_params *i) {
+	crypto_params_cleanup(o);
+	*o = *i;
+	if (o->mki_len > 255)
+		o->mki_len = 0;
+	if (o->mki_len) {
+		o->mki = malloc(i->mki_len);
+		memcpy(o->mki, i->mki, i->mki_len);
+	}
+}
 static inline void crypto_init(struct crypto_context *c, const struct crypto_params *p) {
 	crypto_cleanup(c);
-	c->params = *p;
+	crypto_params_copy(&c->params, p);
 }
 
 

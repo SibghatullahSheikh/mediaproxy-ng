@@ -29,6 +29,8 @@ static int aes_f8_encrypt_rtcp(struct crypto_context *c, struct rtcp_packet *r, 
 static int aes_cm_session_key_init(struct crypto_context *c);
 static int aes_f8_session_key_init(struct crypto_context *c);
 static int evp_session_key_cleanup(struct crypto_context *c);
+static int null_crypt_rtp(struct crypto_context *c, struct rtp_header *r, str *s, u_int64_t idx);
+static int null_crypt_rtcp(struct crypto_context *c, struct rtcp_packet *r, str *s, u_int64_t idx);
 
 /* all lengths are in bytes */
 const struct crypto_suite crypto_suites[] = {
@@ -54,6 +56,7 @@ const struct crypto_suite crypto_suites[] = {
 		.hash_rtcp		= hmac_sha1_rtcp,
 		.session_key_init	= aes_cm_session_key_init,
 		.session_key_cleanup	= evp_session_key_cleanup,
+		.dtls_profile_code	= "\x00\x01",
 	},
 	{
 		.name			= "AES_CM_128_HMAC_SHA1_32",
@@ -77,6 +80,7 @@ const struct crypto_suite crypto_suites[] = {
 		.hash_rtcp		= hmac_sha1_rtcp,
 		.session_key_init	= aes_cm_session_key_init,
 		.session_key_cleanup	= evp_session_key_cleanup,
+		.dtls_profile_code	= "\x00\x02",
 	},
 	{
 		.name			= "F8_128_HMAC_SHA1_80",
@@ -100,6 +104,52 @@ const struct crypto_suite crypto_suites[] = {
 		.hash_rtcp		= hmac_sha1_rtcp,
 		.session_key_init	= aes_f8_session_key_init,
 		.session_key_cleanup	= evp_session_key_cleanup,
+	},
+	{
+		.name			= "NULL_HMAC_SHA1_80",
+		.master_key_len		= 16,
+		.master_salt_len	= 14,
+		.session_key_len	= 0,
+		.session_salt_len	= 0,
+		.srtp_lifetime		= 1ULL << 48,
+		.srtcp_lifetime		= 1ULL << 31,
+		.kernel_cipher		= MPC_NULL,
+		.kernel_hmac		= MPH_HMAC_SHA1,
+		.srtp_auth_tag		= 10,
+		.srtcp_auth_tag		= 10,
+		.srtp_auth_key_len	= 20,
+		.srtcp_auth_key_len	= 20,
+		.encrypt_rtp		= null_crypt_rtp,
+		.decrypt_rtp		= null_crypt_rtp,
+		.encrypt_rtcp		= null_crypt_rtcp,
+		.decrypt_rtcp		= null_crypt_rtcp,
+		.hash_rtp		= hmac_sha1_rtp,
+		.hash_rtcp		= hmac_sha1_rtcp,
+		.session_key_cleanup	= evp_session_key_cleanup,
+		.dtls_profile_code	= "\x00\x05",
+	},
+	{
+		.name			= "NULL_HMAC_SHA1_32",
+		.master_key_len		= 16,
+		.master_salt_len	= 14,
+		.session_key_len	= 0,
+		.session_salt_len	= 0,
+		.srtp_lifetime		= 1ULL << 48,
+		.srtcp_lifetime		= 1ULL << 31,
+		.kernel_cipher		= MPC_NULL,
+		.kernel_hmac		= MPH_HMAC_SHA1,
+		.srtp_auth_tag		= 4,
+		.srtcp_auth_tag		= 10,
+		.srtp_auth_key_len	= 20,
+		.srtcp_auth_key_len	= 20,
+		.encrypt_rtp		= null_crypt_rtp,
+		.decrypt_rtp		= null_crypt_rtp,
+		.encrypt_rtcp		= null_crypt_rtcp,
+		.decrypt_rtcp		= null_crypt_rtcp,
+		.hash_rtp		= hmac_sha1_rtp,
+		.hash_rtcp		= hmac_sha1_rtcp,
+		.session_key_cleanup	= evp_session_key_cleanup,
+		.dtls_profile_code	= "\x00\x06",
 	},
 };
 
@@ -466,5 +516,12 @@ static int evp_session_key_cleanup(struct crypto_context *c) {
 		c->session_key_ctx[i] = NULL;
 	}
 
+	return 0;
+}
+
+static int null_crypt_rtp(struct crypto_context *c, struct rtp_header *r, str *s, u_int64_t idx) {
+	return 0;
+}
+static int null_crypt_rtcp(struct crypto_context *c, struct rtcp_packet *r, str *s, u_int64_t idx) {
 	return 0;
 }

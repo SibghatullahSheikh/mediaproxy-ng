@@ -100,8 +100,8 @@ struct attribute_crypto {
 	str salt;
 	char key_salt_buf[30];
 	u_int64_t lifetime;
-	unsigned int mki,
-		     mki_len;
+	unsigned char mki[256];
+	unsigned int mki_len;
 };
 
 struct attribute_ssrc {
@@ -386,7 +386,6 @@ static int parse_attribute_ssrc(struct sdp_attribute *output) {
 	return 0;
 }
 
-/* XXX error handling/logging */
 static int parse_attribute_crypto(struct sdp_attribute *output) {
 	char *start, *end, *endp;
 	struct attribute_crypto *c;
@@ -395,6 +394,8 @@ static int parse_attribute_crypto(struct sdp_attribute *output) {
 	unsigned int b64_save = 0;
 	gsize ret;
 	str s;
+	u_int32_t u32;
+	const char *err;
 
 	output->attr = ATTR_CRYPTO;
 
@@ -408,27 +409,32 @@ static int parse_attribute_crypto(struct sdp_attribute *output) {
 	c = &output->u.crypto;
 
 	c->tag = strtoul(c->tag_str.s, &endp, 10);
+	err = "invalid 'tag'";
 	if (endp == c->tag_str.s)
-		return -1;
+		goto error;
 
 	c->crypto_suite = crypto_find_suite(&c->crypto_suite_str);
+	err = "unknown crypto suite";
 	if (!c->crypto_suite)
-		return -1;
+		goto error;
 	salt_key_len = c->crypto_suite->master_key_len
 			+ c->crypto_suite->master_salt_len;
 	assert(sizeof(c->key_salt_buf) >= salt_key_len);
 	enc_salt_key_len = ceil((double) salt_key_len * 4.0/3.0);
 
+	err = "invalid key parameter length";
 	if (c->key_params_str.len < 7 + enc_salt_key_len)
-		return -1;
+		goto error;
+	err = "unknown key method";
 	if (strncasecmp(c->key_params_str.s, "inline:", 7))
-		return -1;
+		goto error;
 	c->key_base64_str = c->key_params_str;
 	str_shift(&c->key_base64_str, 7);
 	ret = g_base64_decode_step(c->key_base64_str.s, enc_salt_key_len,
 			(guchar *) c->key_salt_buf, &b64_state, &b64_save);
+	err = "invalid base64 encoding";
 	if (ret != salt_key_len)
-		return -1;
+		goto error;
 
 	c->master_key.s = c->key_salt_buf;
 	c->master_key.len = c->crypto_suite->master_key_len;
@@ -438,8 +444,9 @@ static int parse_attribute_crypto(struct sdp_attribute *output) {
 	c->lifetime_str = c->key_params_str;
 	str_shift(&c->lifetime_str, 7 + enc_salt_key_len);
 	if (c->lifetime_str.len >= 2) {
+		err = "invalid key parameter syntax";
 		if (c->lifetime_str.s[0] != '|')
-			return -1;
+			goto error;
 		str_shift(&c->lifetime_str, 1);
 		str_chr_str(&c->mki_str, &c->lifetime_str, '|');
 		if (!c->mki_str.s) {
@@ -459,29 +466,42 @@ static int parse_attribute_crypto(struct sdp_attribute *output) {
 	if (c->lifetime_str.s) {
 		if (c->lifetime_str.len >= 3 && !memcmp(c->lifetime_str.s, "2^", 2)) {
 			c->lifetime = strtoull(c->lifetime_str.s + 2, NULL, 10);
+			err = "invalid key lifetime";
 			if (!c->lifetime || c->lifetime > 64)
-				return -1;
+				goto error;
 			c->lifetime = 1 << c->lifetime;
 		}
 		else
 			c->lifetime = strtoull(c->lifetime_str.s, NULL, 10);
 
+		err = "invalid key lifetime";
 		if (!c->lifetime || c->lifetime > c->crypto_suite->srtp_lifetime
 				|| c->lifetime > c->crypto_suite->srtcp_lifetime)
-			return -1;
+			goto error;
 	}
 
 	if (c->mki_str.s) {
 		str_chr_str(&s, &c->mki_str, ':');
+		err = "invalid MKI specification";
 		if (!s.s)
-			return -1;
-		c->mki = strtoul(c->mki_str.s, NULL, 10);
+			goto error;
+		u32 = htonl(strtoul(c->mki_str.s, NULL, 10));
 		c->mki_len = strtoul(s.s + 1, NULL, 10);
-		if (!c->mki || !c->mki_len || c->mki_len > 128)
-			return -1;
+		err = "MKI too long";
+		if (c->mki_len > sizeof(c->mki))
+			goto error;
+		memset(c->mki, 0, c->mki_len);
+		if (sizeof(u32) >= c->mki_len)
+			memcpy(c->mki, ((void *) &u32) + (sizeof(u32) - c->mki_len), c->mki_len);
+		else
+			memcpy(c->mki + (c->mki_len - sizeof(u32)), &u32, sizeof(u32));
 	}
 
 	return 0;
+
+error:
+	mylog(LOG_ERROR, "Failed to parse a=crypto attribute: %s", err);
+	return -1;
 }
 
 static int parse_attribute_rtcp(struct sdp_attribute *output) {
@@ -944,8 +964,11 @@ int sdp_streams(const GQueue *sessions, GQueue *streams, struct sdp_ng_flags *fl
 			attr = attr_get_by_id(&media->attributes, ATTR_CRYPTO);
 			if (attr) {
 				sp->crypto.crypto_suite = attr->u.crypto.crypto_suite;
-				sp->crypto.mki = attr->u.crypto.mki;
 				sp->crypto.mki_len = attr->u.crypto.mki_len;
+				if (sp->crypto.mki_len) {
+					sp->crypto.mki = malloc(sp->crypto.mki_len);
+					memcpy(sp->crypto.mki, attr->u.crypto.mki, sp->crypto.mki_len);
+				}
 				sp->sdes_tag = attr->u.crypto.tag;
 				assert(sizeof(sp->crypto.master_key) >= attr->u.crypto.master_key.len);
 				assert(sizeof(sp->crypto.master_salt) >= attr->u.crypto.salt.len);
@@ -1429,8 +1452,9 @@ static int has_ice(GQueue *sessions) {
 static void insert_crypto(struct call_media *media, struct sdp_chopper *chop) {
 	char b64_buf[64];
 	char *p;
-	int state = 0, save = 0;
+	int state = 0, save = 0, i;
 	struct crypto_params *cp = &media->sdes_out.params;
+	unsigned long long ull;
 
 	if (!cp->crypto_suite)
 		return;
@@ -1452,6 +1476,12 @@ static void insert_crypto(struct call_media *media, struct sdp_chopper *chop) {
 	chopper_append_c(chop, cp->crypto_suite->name);
 	chopper_append_c(chop, " inline:");
 	chopper_append_dup(chop, b64_buf, p - b64_buf);
+	if (cp->mki_len) {
+		ull = 0;
+		for (i = 0; i < cp->mki_len && i < sizeof(ull); i++)
+			ull |= cp->mki[cp->mki_len - i - 1] << (i * 8);
+		chopper_append_printf(chop, "|%llu:%u", ull, cp->mki_len);
+	}
 	chopper_append_c(chop, "\r\n");
 }
 

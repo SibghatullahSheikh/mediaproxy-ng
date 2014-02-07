@@ -227,8 +227,11 @@ static void streams_parse(const char *s, struct callmaster *m, GQueue *q) {
 static void streams_free(GQueue *q) {
 	struct stream_params *s;
 
-	while ((s = g_queue_pop_head(q)))
+	while ((s = g_queue_pop_head(q))) {
+		if (s->crypto.mki)
+			free(s->crypto.mki);
 		g_slice_free1(sizeof(*s), s);
+	}
 }
 
 

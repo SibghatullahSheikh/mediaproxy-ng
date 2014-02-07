@@ -44,7 +44,7 @@ static inline int check_session_keys(struct crypto_context *c) {
 
 error:
 	mylog(LOG_ERROR, "Error generating SRTP session keys");
-	abort();
+	assert(0);
 	return -1;
 }
 
@@ -122,7 +122,6 @@ static u_int64_t packet_index(struct crypto_context *c, struct rtp_header *rtp) 
 }
 
 void rtp_append_mki(str *s, struct crypto_context *c) {
-	u_int32_t mki_part;
 	char *p;
 
 	if (!c->params.mki_len)
@@ -130,22 +129,7 @@ void rtp_append_mki(str *s, struct crypto_context *c) {
 
 	/* RTP_BUFFER_TAIL_ROOM guarantees enough room */
 	p = s->s + s->len;
-	memset(p, 0, c->params.mki_len);
-	if (c->params.mki_len > 4) {
-		mki_part = (c->params.mki & 0xffffffff00000000ULL) >> 32;
-		mki_part = htonl(mki_part);
-		if (c->params.mki_len < 8)
-			memcpy(p, ((char *) &mki_part) + (8 - c->params.mki_len), c->params.mki_len - 4);
-		else
-			memcpy(p + (c->params.mki_len - 8), &mki_part, 4);
-	}
-	mki_part = (c->params.mki & 0xffffffffULL);
-	mki_part = htonl(mki_part);
-	if (c->params.mki_len < 4)
-		memcpy(p, ((char *) &mki_part) + (4 - c->params.mki_len), c->params.mki_len);
-	else
-		memcpy(p + (c->params.mki_len - 4), &mki_part, 4);
-
+	memcpy(p, c->params.mki, c->params.mki_len);
 	s->len += c->params.mki_len;
 }
 

@@ -337,11 +337,12 @@ static int __k_srtp_crypt(struct mediaproxy_srtp *s, struct crypto_context *c) {
 	*s = (struct mediaproxy_srtp) {
 		.cipher		= c->params.crypto_suite->kernel_cipher,
 		.hmac		= c->params.crypto_suite->kernel_hmac,
-		.mki		= c->params.mki,
 		.mki_len	= c->params.mki_len,
 		.last_index	= c->last_index,
 		.auth_tag_len	= c->params.crypto_suite->srtp_auth_tag,
 	};
+	if (c->params.mki_len)
+		memcpy(s->mki, c->params.mki, c->params.mki_len);
 	memcpy(s->master_key, c->params.master_key, c->params.crypto_suite->master_key_len);
 	memcpy(s->master_salt, c->params.master_salt, c->params.crypto_suite->master_salt_len);
 	return 0;
@@ -1434,7 +1435,7 @@ static void __generate_crypto(struct call_media *this, struct call_media *other)
 
 	if (other->sdes_in.params.crypto_suite) {
 		/* SRTP <> SRTP case, copy from other stream */
-		*cp = other->sdes_in.params;
+		crypto_params_copy(cp, &other->sdes_in.params);
 		return;
 	}
 
@@ -1511,7 +1512,7 @@ int monologue_offer_answer(struct call_monologue *monologue, GQueue *streams,
 
 		/* copy parameters advertised by the sender of this message */
 		other_media->rtcp_mux = sp->rtcp_mux;
-		other_media->sdes_in.params = sp->crypto;
+		crypto_params_copy(&other_media->sdes_in.params, &sp->crypto);
 		other_media->sdes_in.tag = sp->sdes_tag;
 		other_media->asymmetric = sp->asymmetric;
 

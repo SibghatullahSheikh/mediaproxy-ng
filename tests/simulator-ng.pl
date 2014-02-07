@@ -269,6 +269,21 @@ sub aes_f8_iv_rtcp {
 	return $iv;
 }
 
+sub append_mki {
+	my ($ctx_dir, $pack_r) = @_;
+
+	$$ctx_dir{rtp_mki_len} or return;
+
+	my $mki = pack('N', $$ctx_dir{rtp_mki});
+	while (length($mki) < $$ctx_dir{rtp_mki_len}) {
+		$mki = "\x00" . $mki;
+	}
+	if (length($mki) > $$ctx_dir{rtp_mki_len}) {
+		$mki = substr($mki, -$$ctx_dir{rtp_mki_len});
+	}
+	$$pack_r .= $mki;
+}
+
 sub rtcp_encrypt {
 	my ($r, $ctx, $dir) = @_;
 
@@ -287,6 +302,8 @@ sub rtcp_encrypt {
 	$pkt .= pack("N", (($$ctx{$dir}{rtcp_index} || 0) | 0x80000000));
 
 	my $hmac = hmac_sha1($pkt, $$ctx{$dir}{rtcp_session_auth_key});
+
+	append_mki($$ctx{$dir}, \$pkt);
 
 	#$pkt .= pack("N", 1); # mki
 	$pkt .= substr($hmac, 0, 10);
@@ -320,6 +337,8 @@ sub rtp_encrypt {
 
 	my $hmac = hmac_sha1($pkt . pack("N", $$ctx{$dir}{rtp_roc}), $$ctx{$dir}{rtp_session_auth_key});
 #	print("HMAC for packet " . unpack("H*", $pkt) . " ROC $roc is " . unpack("H*", $hmac) . "\n");
+
+	append_mki($$ctx{$dir}, \$pkt);
 
 	#$pkt .= pack("N", 1); # mki
 	$pkt .= substr($hmac, 0, $$ctx{$dir}{crypto_suite}{auth_tag});
@@ -361,6 +380,15 @@ sub savp_sdp {
 	if (!$$ctx{out}{crypto_suite}) {
 		$$ctx{out}{crypto_suite} = $$ctx_o{in}{crypto_suite} ? $$ctx_o{in}{crypto_suite}
 			: $crypto_suites[rand(@crypto_suites)];
+
+		$$ctx{out}{rtp_mki_len} = 0;
+		if (rand() > .5) {
+			$$ctx{out}{rtp_mki_len} = int(rand(120)) + 1;
+			$$ctx{out}{rtp_mki} = int(rand(2**30)) | 1;
+			if ($$ctx{out}{rtp_mki_len} < 32) {
+				$$ctx{out}{rtp_mki} &= (0xffffffff >> (32 - ($$ctx{out}{rtp_mki_len})));
+			}
+		}
 	}
 
 	if (!$$ctx{out}{rtp_master_key}) {
@@ -373,7 +401,14 @@ sub savp_sdp {
 		$NOENC{rtp_master_key} = $$ctx{out}{rtp_master_key};
 		$NOENC{rtp_master_salt} = $$ctx{out}{rtp_master_salt};
 	}
-	return "a=crypto:0 $$ctx{out}{crypto_suite}{str} inline:" . encode_base64($$ctx{out}{rtp_master_key} . $$ctx{out}{rtp_master_salt}, '') . "\n";
+
+	my $ret = "a=crypto:0 $$ctx{out}{crypto_suite}{str} inline:" . encode_base64($$ctx{out}{rtp_master_key} . $$ctx{out}{rtp_master_salt}, '');
+	if ($$ctx{out}{rtp_mki_len}) {
+		$ret .= "|$$ctx{out}{rtp_mki}:$$ctx{out}{rtp_mki_len}";
+	}
+
+	$ret .= "\n";
+	return $ret;
 }
 
 sub rtcp_sr {
@@ -531,7 +566,7 @@ sub do_rtp {
 				}
 				$NOENC and $repl = $expect;
 				!$repl && $KEEPGOING and next;
-				$repl eq $expect or die hexdump($repl, $expect) . " $$trans{name} > $$trans_o{name}, RTP port $$outputs[$j][0]";
+				$repl eq $expect or die hexdump($repl, $expect) . " $$trans{name} > $$trans_o{name}, $$c{callid}, RTP port $$outputs[$j][0]";
 
 				$rtcp or next;
 				($payload, $expect) = $$trans{rtcp_func}($trans_o, $$tcx[$j], $$tcx_o[$j]);
@@ -549,7 +584,7 @@ sub do_rtp {
 				$repl = send_receive($sendfd, $expfd, $payload, $dst);
 				$NOENC and $repl = $expect;
 				!$repl && $KEEPGOING and next;
-				$repl eq $expect or die hexdump($repl, $expect) . " $$trans{name} > $$trans_o{name}, RTCP";
+				$repl eq $expect or die hexdump($repl, $expect) . " $$trans{name} > $$trans_o{name}, $$c{callid}, RTCP";
 			}
 		}
 	}
