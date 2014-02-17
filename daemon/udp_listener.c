@@ -26,7 +26,7 @@ static void udp_listener_incoming(int fd, void *p, uintptr_t x) {
 	struct sockaddr_in6 sin;
 	socklen_t sin_len;
 	int len;
-	char buf[8192];
+	char buf[0x10000];
 	char addr[64];
 	str str;
 
