@@ -51,6 +51,7 @@ struct call_monologue;
 #include "bencode.h"
 #include "str.h"
 #include "crypto.h"
+#include "dtls.h"
 
 
 
@@ -118,6 +119,7 @@ struct stream_params {
 	unsigned int		sdes_tag;
 	enum stream_direction	direction[2];
 	int			desired_family;
+	struct dtls_fingerprint fingerprint;
 
 	int			no_rtcp:1;
 	int			implicit_rtcp:1;
@@ -125,6 +127,8 @@ struct stream_params {
 	int			send:1;
 	int			recv:1;
 	int			asymmetric:1;
+	int			setup_active:1;
+	int			setup_passive:1;
 };
 
 struct stream_fd {
@@ -193,6 +197,7 @@ struct call_media {
 		unsigned int		tag;
 	}			sdes_in,
 				sdes_out;
+	struct dtls_fingerprint fingerprint;
 
 	GQueue			streams; /* normally RTP + RTCP */
 	GSList			*endpoint_maps;
@@ -201,6 +206,8 @@ struct call_media {
 	int			send:1;
 	int			recv:1;
 	int			rtcp_mux:1;
+	int			setup_active:1;
+	int			setup_passive:1;
 };
 
 /* half a dialogue */

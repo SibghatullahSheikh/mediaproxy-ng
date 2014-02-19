@@ -10,20 +10,22 @@
 
 
 
-enum setup_value {
-	SETUP_UNKNOWN = 0,
-	SETUP_ACTPASS,
-	SETUP_ACTIVE,
-	SETUP_PASSIVE,
-	SETUP_HOLDCONN,
-};
-
-
 struct dtls_hash_func {
 	const char *name;
 	unsigned int num_bytes;
 	unsigned int (*__func)(unsigned char *, X509 *);
 };
+
+struct dtls_fingerprint {
+	unsigned char digest[64];
+	const struct dtls_hash_func *hash_func;
+};
+
+struct dtls_cert {
+	struct dtls_fingerprint fingerprint;
+	X509 *x509;
+};
+
 
 
 
@@ -34,15 +36,13 @@ const struct dtls_hash_func *dtls_find_hash_func(const str *);
 
 
 
-#define dtls_hash(o, h, c) __dtls_hash(o, sizeof(o), h, c)
-static inline void __dtls_hash(unsigned char *out, unsigned int buflen,
-		const struct dtls_hash_func *hf, X509 *cert)
+static inline void dtls_hash(struct dtls_fingerprint *fp, X509 *cert)
 {
 	unsigned int n;
 
-	assert(buflen >= hf->num_bytes);
-	n = hf->__func(out, cert);
-	assert(n == hf->num_bytes);
+	assert(sizeof(fp->digest) >= fp->hash_func->num_bytes);
+	n = fp->hash_func->__func(fp->digest, cert);
+	assert(n == fp->hash_func->num_bytes);
 }
 
 

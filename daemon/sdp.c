@@ -130,7 +130,13 @@ struct attribute_fingerprint {
 
 struct attribute_setup {
 	str s;
-	enum setup_value value;
+	enum {
+		SETUP_UNKNOWN = 0,
+		SETUP_ACTPASS,
+		SETUP_ACTIVE,
+		SETUP_PASSIVE,
+		SETUP_HOLDCONN,
+	} value;
 };
 
 struct sdp_attribute {
@@ -190,6 +196,15 @@ static str ice_foundation_str_alt;
 
 static inline struct sdp_attribute *attr_get_by_id(struct sdp_attributes *a, int id) {
 	return g_hash_table_lookup(a->id_hash, &id);
+}
+
+static struct sdp_attribute *attr_get_by_id_m_s(struct sdp_media *m, int id) {
+	struct sdp_attribute *a;
+
+	a = attr_get_by_id(&m->attributes, id);
+	if (a)
+		return a;
+	return attr_get_by_id(&m->session->attributes, id);
 }
 
 
@@ -961,6 +976,7 @@ int sdp_streams(const GQueue *sessions, GQueue *streams, struct sdp_ng_flags *fl
 			sp->desired_family = flags->address_family;
 			sp->asymmetric = flags->asymmetric;
 
+			/* a=crypto */
 			attr = attr_get_by_id(&media->attributes, ATTR_CRYPTO);
 			if (attr) {
 				sp->crypto.crypto_suite = attr->u.crypto.crypto_suite;
@@ -978,19 +994,36 @@ int sdp_streams(const GQueue *sessions, GQueue *streams, struct sdp_ng_flags *fl
 						attr->u.crypto.salt.len);
 			}
 
+			/* a=sendrecv/sendonly/recvonly/inactive */
 			sp->send = 1;
 			sp->recv = 1;
-			if (attr_get_by_id(&media->attributes, ATTR_RECVONLY)
-					|| attr_get_by_id(&session->attributes, ATTR_RECVONLY))
+			if (attr_get_by_id_m_s(media, ATTR_RECVONLY))
 				sp->send = 0;
-			else if (attr_get_by_id(&media->attributes, ATTR_SENDONLY)
-					|| attr_get_by_id(&session->attributes, ATTR_SENDONLY))
+			else if (attr_get_by_id_m_s(media, ATTR_SENDONLY))
 				sp->recv = 0;
-			else if (attr_get_by_id(&media->attributes, ATTR_INACTIVE)
-					|| attr_get_by_id(&session->attributes, ATTR_INACTIVE))
+			else if (attr_get_by_id_m_s(media, ATTR_INACTIVE))
 			{
 				sp->recv = 0;
 				sp->send = 0;
+			}
+
+			/* a=setup */
+			attr = attr_get_by_id_m_s(media, ATTR_SETUP);
+			if (attr) {
+				if (attr->u.setup.value == SETUP_ACTPASS
+						|| attr->u.setup.value == SETUP_ACTIVE)
+					sp->setup_active = 1;
+				if (attr->u.setup.value == SETUP_ACTPASS
+						|| attr->u.setup.value == SETUP_PASSIVE)
+					sp->setup_passive = 1;
+			}
+
+			/* a=fingerprint */
+			attr = attr_get_by_id_m_s(media, ATTR_FINGERPRINT);
+			if (attr && attr->u.fingerprint.hash_func) {
+				sp->fingerprint.hash_func = attr->u.fingerprint.hash_func;
+				memcpy(sp->fingerprint.digest, attr->u.fingerprint.fingerprint,
+						sp->fingerprint.hash_func->num_bytes);
 			}
 
 			/* determine RTCP endpoint */

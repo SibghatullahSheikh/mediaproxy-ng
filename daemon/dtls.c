@@ -9,13 +9,6 @@
 
 
 
-struct dtls_cert {
-	X509 *x509;
-	const struct dtls_hash_func *hash_func;
-	unsigned char digest[20];
-};
-
-
 
 
 static unsigned int sha_1_func(unsigned char *, X509 *);
@@ -170,8 +163,8 @@ int dtls_init() {
 
 	/* digest */
 
-	dtls_cert.hash_func = &hash_funcs[0];
-	dtls_hash(dtls_cert.digest, dtls_cert.hash_func, x509);
+	dtls_cert.fingerprint.hash_func = &hash_funcs[0];
+	dtls_hash(&dtls_cert.fingerprint, x509);
 
 	dtls_cert.x509 = x509;
 

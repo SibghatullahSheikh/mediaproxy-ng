@@ -1519,6 +1519,11 @@ int monologue_offer_answer(struct call_monologue *monologue, GQueue *streams,
 		other_media->recv = media->send = sp->send;
 		other_media->send = media->recv = sp->recv;
 
+		other_media->setup_passive = sp->setup_passive;
+		other_media->setup_active = sp->setup_active;
+
+		other_media->fingerprint = sp->fingerprint;
+
 		__generate_crypto(media, other_media);
 
 		/* deduct address family from stream parameters received */
