@@ -52,7 +52,7 @@ const int num_hash_funcs = G_N_ELEMENTS(hash_funcs);
 
 
 
-static struct dtls_cert dtls_cert;
+static struct dtls_cert __dtls_cert;
 
 
 
@@ -163,10 +163,10 @@ int dtls_init() {
 
 	/* digest */
 
-	dtls_cert.fingerprint.hash_func = &hash_funcs[0];
-	dtls_hash(&dtls_cert.fingerprint, x509);
+	__dtls_cert.fingerprint.hash_func = &hash_funcs[0];
+	dtls_hash(&__dtls_cert.fingerprint, x509);
 
-	dtls_cert.x509 = x509;
+	__dtls_cert.x509 = x509;
 
 	/* cleanup */
 
@@ -208,4 +208,9 @@ static unsigned int sha_512_func(unsigned char *o, X509 *x) {
 	const EVP_MD *md;
 	md = EVP_sha512();
 	return generic_func(o, x, md);
+}
+
+
+struct dtls_cert *dtls_cert() {
+	return &__dtls_cert;
 }

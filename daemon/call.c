@@ -1427,8 +1427,12 @@ static void __generate_crypto(struct call_media *this, struct call_media *other)
 
 	if (this->protocol != PROTO_RTP_SAVP && this->protocol != PROTO_RTP_SAVPF) {
 		cp->crypto_suite = NULL;
+		this->dtls_cert = NULL;
 		return;
 	}
+
+	if (!this->dtls_cert)
+		this->dtls_cert = dtls_cert();
 
 	/* for answer case, otherwise defaults to zero */
 	this->sdes_out.tag = this->sdes_in.tag;

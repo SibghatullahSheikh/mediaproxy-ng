@@ -32,6 +32,7 @@ struct dtls_cert {
 int dtls_init();
 
 const struct dtls_hash_func *dtls_find_hash_func(const str *);
+struct dtls_cert *dtls_cert(void);
 
 
 

@@ -197,7 +197,9 @@ struct call_media {
 		unsigned int		tag;
 	}			sdes_in,
 				sdes_out;
-	struct dtls_fingerprint fingerprint;
+
+	struct dtls_fingerprint fingerprint; /* as received */
+	struct dtls_cert	*dtls_cert; /* for outgoing */
 
 	GQueue			streams; /* normally RTP + RTCP */
 	GSList			*endpoint_maps;

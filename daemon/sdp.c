@@ -1095,7 +1095,7 @@ static void chopper_append_dup(struct sdp_chopper *c, const char *s, int len) {
 static void chopper_append_printf(struct sdp_chopper *c, const char *fmt, ...) __attribute__((format(printf,2,3)));
 
 static void chopper_append_printf(struct sdp_chopper *c, const char *fmt, ...) {
-	char buf[32];
+	char buf[512];
 	int l;
 	va_list va;
 
@@ -1482,6 +1482,31 @@ static int has_ice(GQueue *sessions) {
 	return 0;
 }
 
+static void insert_dtls(struct call_media *media, struct sdp_chopper *chop) {
+	char hexbuf[64 * 3 + 1];
+	unsigned char *p;
+	char *o;
+	int i;
+	const struct dtls_hash_func *hf;
+
+	if (!media->dtls_cert)
+		return;
+
+	hf = media->dtls_cert->fingerprint.hash_func;
+
+	assert(sizeof(hexbuf) >= hf->num_bytes * 3);
+	assert(hf->num_bytes > 0);
+
+	p = media->dtls_cert->fingerprint.digest;
+	o = hexbuf;
+	for (i = 0; i < hf->num_bytes; i++)
+		o += sprintf(o, "%02X:", *p++);
+	o[-1] = '\0';
+
+	chopper_append_c(chop, "a=setup:actpass\r\na=fingerprint:");
+	chopper_append_printf(chop, "%s %s\r\n", hf->name, hexbuf);
+}
+
 static void insert_crypto(struct call_media *media, struct sdp_chopper *chop) {
 	char b64_buf[64];
 	char *p;
@@ -1648,6 +1673,7 @@ int sdp_replace(struct sdp_chopper *chop, GQueue *sessions, struct call_monologu
 			}
 
 			insert_crypto(call_media, chop);
+			insert_dtls(call_media, chop);
 
 			if (do_ice) {
 				if (!call_media->ice_ufrag.s) {
