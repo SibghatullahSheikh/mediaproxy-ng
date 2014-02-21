@@ -163,6 +163,7 @@ struct packet_stream {
 	struct endpoint		endpoint;	/* LOCK: out_lock */
 	struct endpoint		advertised_endpoint; /* RO */
 	struct crypto_context	crypto;		/* OUT direction, LOCK: out_lock */
+	struct dtls_connection	dtls;
 
 	struct stats		stats;		/* LOCK: in_lock */
 	struct stats		kernel_stats;	/* LOCK: in_lock */

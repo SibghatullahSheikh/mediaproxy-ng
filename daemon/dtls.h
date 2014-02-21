@@ -23,7 +23,13 @@ struct dtls_fingerprint {
 
 struct dtls_cert {
 	struct dtls_fingerprint fingerprint;
+	EVP_PKEY *pkey;
 	X509 *x509;
+};
+
+struct dtls_connection {
+	SSL_CTX *ssl_ctx;
+	SSL *ssl;
 };
 
 

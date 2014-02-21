@@ -3,11 +3,18 @@
 #include <stdio.h>
 #include <string.h>
 #include <glib.h>
+#include <openssl/ssl.h>
 #include <openssl/x509.h>
 
 #include "str.h"
+#include "aux.h"
+#include "crypto.h"
 
 
+
+
+
+static char ciphers_str[1024];
 
 
 
@@ -72,7 +79,7 @@ const struct dtls_hash_func *dtls_find_hash_func(const str *s) {
 }
 
 
-int dtls_init() {
+static int cert_init() {
 	X509 *x509;
 	EVP_PKEY *pkey;
 	BIGNUM *exponent, *serial_number;
@@ -167,12 +174,36 @@ int dtls_init() {
 	dtls_hash(&__dtls_cert.fingerprint, x509);
 
 	__dtls_cert.x509 = x509;
+	__dtls_cert.pkey = pkey;
 
 	/* cleanup */
 
 	BN_free(exponent);
 	BN_free(serial_number);
 	X509_NAME_free(name);
+
+	return 0;
+}
+
+int dtls_init() {
+	int i;
+	char *p;
+
+	if (cert_init())
+		return -1;
+
+	p = ciphers_str;
+	for (i = 0; i < num_crypto_suites; i++) {
+		if (!crypto_suites[i].dtls_profile_code)
+			continue;
+
+		p += sprintf(p, "%s:", crypto_suites[i].name);
+	}
+
+	assert(p != ciphers_str);
+	assert(p - ciphers_str < sizeof(ciphers_str));
+
+	p[-1] = '\0';
 
 	return 0;
 }
@@ -213,4 +244,50 @@ static unsigned int sha_512_func(unsigned char *o, X509 *x) {
 
 struct dtls_cert *dtls_cert() {
 	return &__dtls_cert;
+}
+
+static int verify_callback(int ok, X509_STORE_CTX *store) {
+	// XXX
+	return 1;
+}
+
+int dtls_connection_init(struct dtls_connection *d, int active, struct dtls_cert *cert, int fd) {
+	ZERO(*d);
+
+	d->ssl_ctx = SSL_CTX_new(active ? DTLSv1_client_method() : DTLSv1_server_method());
+	if (!d->ssl_ctx)
+		goto error;
+
+	if (SSL_CTX_use_certificate(d->ssl_ctx, cert->x509) != 1)
+		goto error;
+	if (SSL_CTX_use_PrivateKey(d->ssl_ctx, cert->pkey) != 1)
+		goto error;
+
+	SSL_CTX_set_verify(d->ssl_ctx, SSL_VERIFY_PEER | SSL_VERIFY_FAIL_IF_NO_PEER_CERT,
+			verify_callback);
+	SSL_CTX_set_verify_depth(d->ssl_ctx, 4);
+	SSL_CTX_set_cipher_list(d->ssl_ctx, "ALL:!ADH:!LOW:!EXP:!MD5:@STRENGTH");
+
+	if (SSL_CTX_set_tlsext_use_srtp(d->ssl_ctx, ciphers_str))
+		goto error;
+
+	d->ssl = SSL_new(d->ssl_ctx);
+	if (!d->ssl)
+		goto error;
+
+	SSL_set_fd(d->ssl, fd);
+
+	SSL_set_mode(d->ssl, SSL_MODE_ENABLE_PARTIAL_WRITE | SSL_MODE_ACCEPT_MOVING_WRITE_BUFFER);
+
+	// XXX ContinueSSL
+
+	return 0;
+
+error:
+	if (d->ssl)
+		SSL_free(d->ssl);
+	if (d->ssl_ctx)
+		SSL_CTX_free(d->ssl_ctx);
+	ZERO(*d);
+	return -1;
 }
