@@ -1467,9 +1467,67 @@ static void __disable_streams(struct call_media *media, unsigned int num_ports) 
 	}
 }
 
+static void __rtcp_mux_logic(const struct sdp_ng_flags *flags, struct call_media *media,
+		struct call_media *other_media)
+{
+	if (flags->opmode == OP_ANSWER) {
+		/* default is to go with the client's choice, unless we were instructed not
+		 * to do that in the offer (see below) */
+		if (!media->rtcp_mux_override)
+			media->rtcp_mux = other_media->rtcp_mux;
+
+		return;
+	}
+
+	if (flags->opmode != OP_OFFER)
+		return;
+
+
+	/* default is to pass through the client's choice */
+	media->rtcp_mux = other_media->rtcp_mux;
+	/* in our offer, we can override the client's choice */
+	if (flags->rtcp_mux_offer)
+		media->rtcp_mux = 1;
+	else if (flags->rtcp_mux_demux)
+		media->rtcp_mux = 0;
+
+	/* we can also control what's going to happen in the answer. it
+	 * depends on what was offered, but by default we go with the other
+	 * client's choice */
+	other_media->rtcp_mux_override = 0;
+	if (other_media->rtcp_mux) {
+		if (!media->rtcp_mux) {
+			/* rtcp-mux was offered, but we don't offer it ourselves.
+			 * the answer will not accept rtcp-mux (wasn't offered).
+			 * the default is to accept the offer, unless we want to
+			 * explicitly reject it. */
+			other_media->rtcp_mux_override = 1;
+			if (flags->rtcp_mux_reject)
+				other_media->rtcp_mux = 0;
+		}
+		else {
+			/* rtcp-mux was offered and we offer it too. default is
+			 * to go with the other client's choice, unless we want to
+			 * either explicitly accept it (possibly demux) or reject
+			 * it (possible reverse demux). */
+			if (flags->rtcp_mux_accept)
+				other_media->rtcp_mux_override = 1;
+			else if (flags->rtcp_mux_reject) {
+				other_media->rtcp_mux_override = 1;
+				other_media->rtcp_mux = 0;
+			}
+		}
+	}
+	else {
+		/* rtcp-mux was not offered. we may offer it, but since it wasn't
+		 * offered to us, we must not accept it. */
+		other_media->rtcp_mux_override = 1;
+	}
+}
+
 /* called with call->master_lock held in W */
 int monologue_offer_answer(struct call_monologue *monologue, GQueue *streams,
-		struct sdp_ng_flags *flags)
+		const struct sdp_ng_flags *flags)
 {
 	struct stream_params *sp;
 	GList *media_iter, *ml_media, *other_ml_media;
@@ -1526,6 +1584,10 @@ int monologue_offer_answer(struct call_monologue *monologue, GQueue *streams,
 
 		other_media->fingerprint = sp->fingerprint;
 
+		/* control rtcp-mux */
+		__rtcp_mux_logic(flags, media, other_media);
+
+		/* SDES and DTLS */
 		__generate_crypto(media, other_media);
 
 		/* deduct address family from stream parameters received */

@@ -799,6 +799,7 @@ a=rtpmap:8 PCMA/8000
 		replace => [ 'origin', 'session connection' ],
 		#direction => [ $$pr{direction}, $$pr_o{direction} ],
 		'received from' => [ qw(IP4 127.0.0.1) ],
+		'rtcp-mux' => ['demux'],
 	};
 	#$viabranch and $dict->{'via-branch'} = $viabranch;
 	if ($op eq 'offer') {

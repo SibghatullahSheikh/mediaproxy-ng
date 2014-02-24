@@ -208,6 +208,7 @@ struct call_media {
 	int			rtcp_mux:1;
 	int			setup_active:1;
 	int			setup_passive:1;
+	int			rtcp_mux_override:1;
 };
 
 /* half a dialogue */
@@ -220,7 +221,7 @@ struct call_monologue {
 	GHashTable		*other_tags;
 	struct call_monologue	*active_dialogue;
 
-	GQueue			medias;	
+	GQueue			medias;
 };
 
 struct call {
@@ -318,7 +319,7 @@ void calls_dump_redis(struct callmaster *);
 struct call *call_get_or_create(const str *callid, struct callmaster *m);
 struct call *call_get_opmode(const str *callid, struct callmaster *m, enum call_opmode opmode);
 struct call_monologue *call_get_mono_dialogue(struct call *call, const str *fromtag, const str *totag);
-int monologue_offer_answer(struct call_monologue *monologue, GQueue *streams, struct sdp_ng_flags *flags);
+int monologue_offer_answer(struct call_monologue *monologue, GQueue *streams, const struct sdp_ng_flags *flags);
 int call_delete_branch(struct callmaster *m, const str *callid, const str *branch,
 	const str *fromtag, const str *totag, bencode_item_t *output);
 void stats_query(struct call *call, const str *fromtag, const str *totag, struct call_stats *stats,
