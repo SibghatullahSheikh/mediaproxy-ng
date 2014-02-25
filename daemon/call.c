@@ -1483,8 +1483,10 @@ static void __rtcp_mux_logic(const struct sdp_ng_flags *flags, struct call_media
 		return;
 
 
-	/* default is to pass through the client's choice */
-	media->rtcp_mux = other_media->rtcp_mux;
+	/* default is to pass through the client's choice, unless our peer is already
+	 * talking rtcp-mux, then we stick to that */
+	if (!media->rtcp_mux)
+		media->rtcp_mux = other_media->rtcp_mux;
 	/* in our offer, we can override the client's choice */
 	if (flags->rtcp_mux_offer)
 		media->rtcp_mux = 1;
