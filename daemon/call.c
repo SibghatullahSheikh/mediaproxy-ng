@@ -1345,10 +1345,14 @@ static void __fill_stream(struct packet_stream *ps, const struct endpoint *ep, u
 
 static void __init_stream(struct packet_stream *ps) {
 	struct call_media *media = ps->media;
+	int active;
 
 	if (ps->sfd)
 		crypto_init(&ps->sfd->crypto, &media->sdes_in.params);
 	crypto_init(&ps->crypto, &media->sdes_out.params);
+
+	active = (ps->filled && media->setup_active);
+	dtls_connection_init(&ps->dtls, active, media->dtls_cert);
 }
 
 static void __init_streams(struct call_media *A, struct call_media *B, const struct stream_params *sp) {
@@ -1423,9 +1427,14 @@ static void __init_streams(struct call_media *A, struct call_media *B, const str
 }
 
 /* generates SDES parametes for outgoing SDP, which is our media "out" direction */
-static void __generate_crypto(struct call_media *this, struct call_media *other) {
+static void __generate_crypto(const struct sdp_ng_flags *flags, struct call_media *this,
+		struct call_media *other)
+{
 	struct crypto_params *cp = &this->sdes_out.params,
 			     *cp_in = &this->sdes_in.params;
+
+	if (!flags)
+		return;
 
 	if (this->protocol != PROTO_RTP_SAVP && this->protocol != PROTO_RTP_SAVPF) {
 		cp->crypto_suite = NULL;
@@ -1435,6 +1444,17 @@ static void __generate_crypto(struct call_media *this, struct call_media *other)
 
 	if (!this->dtls_cert)
 		this->dtls_cert = dtls_cert();
+
+	if (flags->opmode == OP_OFFER) {
+		/* we always offer actpass */
+		this->setup_passive = 1;
+		this->setup_active = 1;
+	}
+	else {
+		/* if we can be active, we will, otherwise we'll be passive */
+		if (this->setup_active)
+			this->setup_passive = 0;
+	}
 
 	/* for answer case, otherwise defaults to zero */
 	this->sdes_out.tag = this->sdes_in.tag;
@@ -1587,8 +1607,8 @@ int monologue_offer_answer(struct call_monologue *monologue, GQueue *streams,
 		other_media->recv = media->send = sp->send;
 		other_media->send = media->recv = sp->recv;
 
-		other_media->setup_passive = sp->setup_passive;
-		other_media->setup_active = sp->setup_active;
+		other_media->setup_passive = sp->setup_active;
+		other_media->setup_active = sp->setup_passive;
 
 		other_media->fingerprint = sp->fingerprint;
 
@@ -1596,7 +1616,7 @@ int monologue_offer_answer(struct call_monologue *monologue, GQueue *streams,
 		__rtcp_mux_logic(flags, media, other_media);
 
 		/* SDES and DTLS */
-		__generate_crypto(media, other_media);
+		__generate_crypto(flags, media, other_media);
 
 		/* deduct address family from stream parameters received */
 		other_media->desired_family = AF_INET;

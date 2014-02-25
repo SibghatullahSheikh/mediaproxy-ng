@@ -605,12 +605,15 @@ static int parse_attribute_fingerprint(struct sdp_attribute *output) {
 			return -1;
 
 		if (c[2] != ':')
-			break;
+			goto done;
 
 		c += 3;
 	}
 
-	if (i != output->u.fingerprint.hash_func->num_bytes)
+	return -1;
+
+done:
+	if (++i != output->u.fingerprint.hash_func->num_bytes)
 		return -1;
 
 	return 0;
@@ -1313,6 +1316,8 @@ static int process_session_attributes(struct sdp_chopper *chop, struct sdp_attri
 			case ATTR_SENDONLY:
 			case ATTR_RECVONLY:
 			case ATTR_SENDRECV:
+			case ATTR_FINGERPRINT:
+			case ATTR_SETUP:
 				goto strip;
 
 			case ATTR_GROUP:
@@ -1362,6 +1367,8 @@ static int process_media_attributes(struct sdp_chopper *chop, struct sdp_media *
 			case ATTR_SENDONLY:
 			case ATTR_RECVONLY:
 			case ATTR_SENDRECV:
+			case ATTR_FINGERPRINT:
+			case ATTR_SETUP:
 				goto strip;
 
 			case ATTR_MID:
@@ -1488,6 +1495,7 @@ static void insert_dtls(struct call_media *media, struct sdp_chopper *chop) {
 	char *o;
 	int i;
 	const struct dtls_hash_func *hf;
+	const char *actpass;
 
 	if (!media->dtls_cert)
 		return;
@@ -1501,10 +1509,25 @@ static void insert_dtls(struct call_media *media, struct sdp_chopper *chop) {
 	o = hexbuf;
 	for (i = 0; i < hf->num_bytes; i++)
 		o += sprintf(o, "%02X:", *p++);
-	o[-1] = '\0';
+	*(--o) = '\0';
 
-	chopper_append_c(chop, "a=setup:actpass\r\na=fingerprint:");
-	chopper_append_printf(chop, "%s %s\r\n", hf->name, hexbuf);
+	actpass = "holdconn";
+	if (media->setup_passive) {
+		if (media->setup_active)
+			actpass = "actpass";
+		else
+			actpass = "passive";
+	}
+	else if (media->setup_active)
+		actpass = "active";
+
+	chopper_append_c(chop, "a=setup:");
+	chopper_append_c(chop, actpass);
+	chopper_append_c(chop, "\r\na=fingerprint:");
+	chopper_append_c(chop, hf->name);
+	chopper_append_c(chop, " ");
+	chopper_append_dup(chop, hexbuf, o - hexbuf);
+	chopper_append_c(chop, "\r\n");
 }
 
 static void insert_crypto(struct call_media *media, struct sdp_chopper *chop) {

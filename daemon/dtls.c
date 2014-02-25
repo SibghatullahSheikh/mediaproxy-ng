@@ -251,7 +251,7 @@ static int verify_callback(int ok, X509_STORE_CTX *store) {
 	return 1;
 }
 
-int dtls_connection_init(struct dtls_connection *d, int active, struct dtls_cert *cert, int fd) {
+int dtls_connection_init(struct dtls_connection *d, int active, struct dtls_cert *cert) {
 	ZERO(*d);
 
 	d->ssl_ctx = SSL_CTX_new(active ? DTLSv1_client_method() : DTLSv1_server_method());
@@ -275,7 +275,12 @@ int dtls_connection_init(struct dtls_connection *d, int active, struct dtls_cert
 	if (!d->ssl)
 		goto error;
 
-	SSL_set_fd(d->ssl, fd);
+	d->r_bio = BIO_new(BIO_s_mem());
+	d->w_bio = BIO_new(BIO_s_mem());
+	if (!d->r_bio || !d->w_bio)
+		goto error;
+
+	SSL_set_bio(d->ssl, d->r_bio, d->w_bio);
 
 	SSL_set_mode(d->ssl, SSL_MODE_ENABLE_PARTIAL_WRITE | SSL_MODE_ACCEPT_MOVING_WRITE_BUFFER);
 
@@ -284,6 +289,10 @@ int dtls_connection_init(struct dtls_connection *d, int active, struct dtls_cert
 	return 0;
 
 error:
+	if (d->r_bio)
+		BIO_free(d->r_bio);
+	if (d->w_bio)
+		BIO_free(d->w_bio);
 	if (d->ssl)
 		SSL_free(d->ssl);
 	if (d->ssl_ctx)
