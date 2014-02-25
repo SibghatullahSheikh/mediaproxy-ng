@@ -462,6 +462,19 @@ static void call_ng_process_flags(struct sdp_ng_flags *out, bencode_item_t *inpu
 			out->ice_force = 1;
 	}
 
+	if ((list = bencode_dictionary_get_expect(input, "rtcp-mux", BENCODE_LIST))) {
+		for (it = list->child; it; it = it->sibling) {
+			if (!bencode_strcmp(it, "offer"))
+				out->rtcp_mux_offer = 1;
+			else if (!bencode_strcmp(it, "demux"))
+				out->rtcp_mux_demux = 1;
+			else if (!bencode_strcmp(it, "accept"))
+				out->rtcp_mux_accept = 1;
+			else if (!bencode_strcmp(it, "reject"))
+				out->rtcp_mux_reject = 1;
+		}
+	}
+
 	bencode_dictionary_get_str(input, "transport protocol", &out->transport_protocol_str);
 	if (!out->transport_protocol_str.s)
 		bencode_dictionary_get_str(input, "transport-protocol", &out->transport_protocol_str);
@@ -500,6 +513,7 @@ static const char *call_offer_answer_ng(bencode_item_t *input, struct callmaster
 		return "Failed to parse SDP";
 
 	call_ng_process_flags(&flags, input);
+	flags.opmode = opmode;
 
 	errstr = "Incomplete SDP specification";
 	if (sdp_streams(&parsed, &streams, &flags))
@@ -516,7 +530,7 @@ static const char *call_offer_answer_ng(bencode_item_t *input, struct callmaster
 	bencode_buffer_destroy_add(output->buffer, (free_func_t) sdp_chopper_destroy, chopper);
 	/* XXX return value */
 	monologue_offer_answer(monologue, &streams, &flags);
-	ret = sdp_replace(chopper, &parsed, monologue, &flags, opmode);
+	ret = sdp_replace(chopper, &parsed, monologue, &flags);
 
 	rwlock_unlock_w(&call->master_lock);
 	redis_update(call, m->conf.redis);

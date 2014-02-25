@@ -26,6 +26,10 @@ GetOptions(
 	'sdp=s'				=> \$options{'sdp'},
 	'sdp-file=s'			=> \$options{'sdp-file'},
 	'ICE=s'				=> \$options{'ICE'},
+	'rtcp-mux-offer'		=> \$options{'rtcp-mux-offer'},
+	'rtcp-mux-demux'		=> \$options{'rtcp-mux-demux'},
+	'rtcp-mux-accept'		=> \$options{'rtcp-mux-accept'},
+	'rtcp-mux-reject'		=> \$options{'rtcp-mux-reject'},
 	'force'				=> \$options{'force'},
 	'v|verbose'			=> \$options{'verbose'},
 ) or die;
@@ -42,6 +46,9 @@ for my $x (split(',', 'trust address,symmetric,asymmetric,force')) {
 }
 for my $x (split(',', 'origin,session connection')) {
 	defined($options{'replace-' . $x}) and push(@{$packet{replace}}, $x);
+}
+for my $x (split(',', 'offer,demux,accept,reject')) {
+	defined($options{'rtcp-mux-' . $x}) and push(@{$packet{'rtcp-mux'}}, $x);
 }
 
 if (defined($options{sdp})) {
