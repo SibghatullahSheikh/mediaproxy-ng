@@ -1568,12 +1568,11 @@ int monologue_offer_answer(struct call_monologue *monologue, GQueue *streams,
 			if (other_media->protocol == PROTO_UNKNOWN)
 				other_media->protocol = PROTO_RTP_AVP;
 		}
-		if (media->protocol == PROTO_UNKNOWN) {
-			if (flags)
-				media->protocol = flags->transport_protocol;
-			if (media->protocol == PROTO_UNKNOWN)
-				media->protocol = other_media->protocol;
-		}
+		/* allow override of outgoing protocol even if we know it already */
+		if (flags && flags->transport_protocol != PROTO_UNKNOWN)
+			media->protocol = flags->transport_protocol;
+		else if (media->protocol == PROTO_UNKNOWN)
+			media->protocol = other_media->protocol;
 
 		/* copy parameters advertised by the sender of this message */
 		other_media->rtcp_mux = sp->rtcp_mux;
