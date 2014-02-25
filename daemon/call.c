@@ -1474,6 +1474,9 @@ static void __disable_streams(struct call_media *media, unsigned int num_ports) 
 static void __rtcp_mux_logic(const struct sdp_ng_flags *flags, struct call_media *media,
 		struct call_media *other_media)
 {
+	if (!flags)
+		return;
+
 	if (flags->opmode == OP_ANSWER) {
 		/* default is to go with the client's choice, unless we were instructed not
 		 * to do that in the offer (see below) */
