@@ -36,6 +36,7 @@ static int null_crypt_rtcp(struct crypto_context *c, struct rtcp_packet *r, str 
 const struct crypto_suite crypto_suites[] = {
 	{
 		.name			= "AES_CM_128_HMAC_SHA1_80",
+		.dtls_name		= "SRTP_AES128_CM_SHA1_80",
 		.master_key_len		= 16,
 		.master_salt_len	= 14,
 		.session_key_len	= 16,
@@ -56,10 +57,10 @@ const struct crypto_suite crypto_suites[] = {
 		.hash_rtcp		= hmac_sha1_rtcp,
 		.session_key_init	= aes_cm_session_key_init,
 		.session_key_cleanup	= evp_session_key_cleanup,
-		.dtls_profile_code	= "\x00\x01",
 	},
 	{
 		.name			= "AES_CM_128_HMAC_SHA1_32",
+		.dtls_name		= "SRTP_AES128_CM_SHA1_32",
 		.master_key_len		= 16,
 		.master_salt_len	= 14,
 		.session_key_len	= 16,
@@ -80,10 +81,10 @@ const struct crypto_suite crypto_suites[] = {
 		.hash_rtcp		= hmac_sha1_rtcp,
 		.session_key_init	= aes_cm_session_key_init,
 		.session_key_cleanup	= evp_session_key_cleanup,
-		.dtls_profile_code	= "\x00\x02",
 	},
 	{
 		.name			= "F8_128_HMAC_SHA1_80",
+//		.dtls_name		= "SRTP_AES128_F8_SHA1_80",
 		.master_key_len		= 16,
 		.master_salt_len	= 14,
 		.session_key_len	= 16,
@@ -104,10 +105,10 @@ const struct crypto_suite crypto_suites[] = {
 		.hash_rtcp		= hmac_sha1_rtcp,
 		.session_key_init	= aes_f8_session_key_init,
 		.session_key_cleanup	= evp_session_key_cleanup,
-		.dtls_profile_code	= "\x00\x03",
 	},
 	{
 		.name			= "F8_128_HMAC_SHA1_32",
+//		.dtls_name		= "SRTP_AES128_F8_SHA1_32",
 		.master_key_len		= 16,
 		.master_salt_len	= 14,
 		.session_key_len	= 16,
@@ -128,10 +129,10 @@ const struct crypto_suite crypto_suites[] = {
 		.hash_rtcp		= hmac_sha1_rtcp,
 		.session_key_init	= aes_f8_session_key_init,
 		.session_key_cleanup	= evp_session_key_cleanup,
-		.dtls_profile_code	= "\x00\x04",
 	},
 	{
 		.name			= "NULL_HMAC_SHA1_80",
+//		.dtls_name		= "SRTP_NULL_SHA1_80",
 		.master_key_len		= 16,
 		.master_salt_len	= 14,
 		.session_key_len	= 0,
@@ -151,10 +152,10 @@ const struct crypto_suite crypto_suites[] = {
 		.hash_rtp		= hmac_sha1_rtp,
 		.hash_rtcp		= hmac_sha1_rtcp,
 		.session_key_cleanup	= evp_session_key_cleanup,
-		.dtls_profile_code	= "\x00\x05",
 	},
 	{
 		.name			= "NULL_HMAC_SHA1_32",
+//		.dtls_name		= "SRTP_NULL_SHA1_32",
 		.master_key_len		= 16,
 		.master_salt_len	= 14,
 		.session_key_len	= 0,
@@ -174,7 +175,6 @@ const struct crypto_suite crypto_suites[] = {
 		.hash_rtp		= hmac_sha1_rtp,
 		.hash_rtcp		= hmac_sha1_rtcp,
 		.session_key_cleanup	= evp_session_key_cleanup,
-		.dtls_profile_code	= "\x00\x06",
 	},
 };
 

@@ -12,6 +12,11 @@
 
 
 
+struct packet_stream;
+struct sockaddr_in6;
+
+
+
 struct dtls_hash_func {
 	const char *name;
 	unsigned int num_bytes;
@@ -33,6 +38,9 @@ struct dtls_connection {
 	SSL_CTX *ssl_ctx;
 	SSL *ssl;
 	BIO *r_bio, *w_bio;
+	int init:1,
+	    active:1,
+	    connected:1;
 };
 
 
@@ -43,7 +51,8 @@ int dtls_init();
 const struct dtls_hash_func *dtls_find_hash_func(const str *);
 struct dtls_cert *dtls_cert(void);
 
-int dtls_connection_init(struct dtls_connection *d, int active, struct dtls_cert *cert);
+int dtls_connection_init(struct packet_stream *, int active, struct dtls_cert *cert);
+int dtls(struct packet_stream *, const str *s, struct sockaddr_in6 *sin);
 
 
 

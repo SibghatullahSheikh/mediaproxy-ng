@@ -22,6 +22,7 @@ typedef int (*session_key_cleanup_func)(struct crypto_context *);
 
 struct crypto_suite {
 	const char *name;
+	const char *dtls_name;
 	unsigned int
 		master_key_len,
 		master_salt_len,

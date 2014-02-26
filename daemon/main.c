@@ -11,6 +11,7 @@
 #include <errno.h>
 #include <stdlib.h>
 #include <time.h>
+#include <openssl/ssl.h>
 
 #include "poller.h"
 #include "control_tcp.h"
@@ -354,6 +355,8 @@ static void init_everything() {
 
 	clock_gettime(CLOCK_REALTIME, &ts);
 	srandom(ts.tv_sec ^ ts.tv_nsec);
+	SSL_library_init();
+	SSL_load_error_strings();
 
 #if !GLIB_CHECK_VERSION(2,32,0)
 	g_thread_init(NULL);

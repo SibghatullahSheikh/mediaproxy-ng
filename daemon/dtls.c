@@ -5,10 +5,15 @@
 #include <glib.h>
 #include <openssl/ssl.h>
 #include <openssl/x509.h>
+#include <sys/types.h>
+#include <sys/socket.h>
+#include <openssl/err.h>
 
 #include "str.h"
 #include "aux.h"
 #include "crypto.h"
+#include "log.h"
+#include "call.h"
 
 
 
@@ -194,10 +199,10 @@ int dtls_init() {
 
 	p = ciphers_str;
 	for (i = 0; i < num_crypto_suites; i++) {
-		if (!crypto_suites[i].dtls_profile_code)
+		if (!crypto_suites[i].dtls_name)
 			continue;
 
-		p += sprintf(p, "%s:", crypto_suites[i].name);
+		p += sprintf(p, "%s:", crypto_suites[i].dtls_name);
 	}
 
 	assert(p != ciphers_str);
@@ -251,7 +256,34 @@ static int verify_callback(int ok, X509_STORE_CTX *store) {
 	return 1;
 }
 
-int dtls_connection_init(struct dtls_connection *d, int active, struct dtls_cert *cert) {
+static int try_connect(struct dtls_connection *d) {
+	int ret, code;
+
+	if (d->connected)
+		return 0;
+
+	if (d->active)
+		ret = SSL_connect(d->ssl);
+	else
+		ret = SSL_accept(d->ssl);
+
+	code = SSL_get_error(d->ssl, ret);
+
+	if (code == SSL_ERROR_NONE) {
+		mylog(LOG_DEBUG, "DTLS handshake successful");
+		d->connected = 1;
+	}
+
+	return 0;
+}
+
+int dtls_connection_init(struct packet_stream *ps, int active, struct dtls_cert *cert) {
+	struct dtls_connection *d = &ps->sfd->dtls;
+	unsigned long err;
+
+	if (d->init)
+		goto connect;
+
 	ZERO(*d);
 
 	d->ssl_ctx = SSL_CTX_new(active ? DTLSv1_client_method() : DTLSv1_server_method());
@@ -281,14 +313,18 @@ int dtls_connection_init(struct dtls_connection *d, int active, struct dtls_cert
 		goto error;
 
 	SSL_set_bio(d->ssl, d->r_bio, d->w_bio);
-
 	SSL_set_mode(d->ssl, SSL_MODE_ENABLE_PARTIAL_WRITE | SSL_MODE_ACCEPT_MOVING_WRITE_BUFFER);
 
-	// XXX ContinueSSL
+	d->init = 1;
+	d->active = active;
+
+connect:
+	dtls(ps, NULL, NULL);
 
 	return 0;
 
 error:
+	err = ERR_peek_last_error();
 	if (d->r_bio)
 		BIO_free(d->r_bio);
 	if (d->w_bio)
@@ -298,5 +334,63 @@ error:
 	if (d->ssl_ctx)
 		SSL_CTX_free(d->ssl_ctx);
 	ZERO(*d);
+	mylog(LOG_ERROR, "Failed to init DTLS connection: %s", ERR_reason_error_string(err));
 	return -1;
+}
+
+int dtls(struct packet_stream *ps, const str *s, struct sockaddr_in6 *fsin) {
+	struct dtls_connection *d = &ps->sfd->dtls;
+	int ret;
+	unsigned char buf[0x10000], ctrl[256];
+	struct msghdr mh;
+	struct iovec iov;
+	struct sockaddr_in6 sin;
+
+	if (d->connected)
+		return 0;
+
+	if (s)
+		BIO_write(d->r_bio, s->s, s->len);
+
+	try_connect(d);
+
+	ret = BIO_ctrl_pending(d->w_bio);
+	if (ret <= 0)
+		return 0;
+
+	if (ret > sizeof(buf)) {
+		mylog(LOG_ERROR, "BIO buffer overflow");
+		BIO_reset(d->w_bio);
+		return 0;
+	}
+
+	ret = BIO_read(d->w_bio, buf, ret);
+	if (ret <= 0)
+		return 0;
+
+	if (!fsin) {
+		ZERO(sin);
+		sin.sin6_family = AF_INET6;
+		sin.sin6_addr = ps->endpoint.ip46;
+		sin.sin6_port = htons(ps->endpoint.port);
+		fsin = &sin;
+	}
+
+	ZERO(mh);
+	mh.msg_control = ctrl;
+	mh.msg_controllen = sizeof(ctrl);
+	mh.msg_name = fsin;
+	mh.msg_namelen = sizeof(*fsin);
+	mh.msg_iov = &iov;
+	mh.msg_iovlen = 1;
+
+	ZERO(iov);
+	iov.iov_base = buf;
+	iov.iov_len = ret;
+
+	callmaster_msg_mh_src(ps->call->callmaster, &mh);
+
+	sendmsg(ps->sfd->fd.fd, &mh, 0);
+
+	return 0;
 }

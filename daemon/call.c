@@ -449,6 +449,10 @@ static int stream_packet(struct stream_fd *sfd, str *s, struct sockaddr_in6 *fsi
 	if (!stream->sfd)
 		goto done;
 
+	if (stream->sfd->dtls.init && is_dtls(s)) {
+		dtls(stream, s, fsin);
+	}
+
 	if (stream->stun && is_stun(s)) {
 		stun_ret = stun(s, stream, fsin);
 		if (!stun_ret)
@@ -1347,12 +1351,21 @@ static void __init_stream(struct packet_stream *ps) {
 	struct call_media *media = ps->media;
 	int active;
 
-	if (ps->sfd)
+	if (ps->sfd) {
 		crypto_init(&ps->sfd->crypto, &media->sdes_in.params);
-	crypto_init(&ps->crypto, &media->sdes_out.params);
 
-	active = (ps->filled && media->setup_active);
-	dtls_connection_init(&ps->dtls, active, media->dtls_cert);
+		if ((media->setup_passive || media->setup_active)
+				&& media->fingerprint.hash_func)
+		{
+			if (!media->dtls_cert)
+				media->dtls_cert = dtls_cert();
+
+			active = (ps->filled && media->setup_active);
+			dtls_connection_init(ps, active, media->dtls_cert);
+		}
+	}
+
+	crypto_init(&ps->crypto, &media->sdes_out.params);
 }
 
 static void __init_streams(struct call_media *A, struct call_media *B, const struct stream_params *sp) {
@@ -1439,11 +1452,10 @@ static void __generate_crypto(const struct sdp_ng_flags *flags, struct call_medi
 	if (this->protocol != PROTO_RTP_SAVP && this->protocol != PROTO_RTP_SAVPF) {
 		cp->crypto_suite = NULL;
 		this->dtls_cert = NULL;
+		this->setup_passive = 0;
+		this->setup_active = 0;
 		return;
 	}
-
-	if (!this->dtls_cert)
-		this->dtls_cert = dtls_cert();
 
 	if (flags->opmode == OP_OFFER) {
 		/* we always offer actpass */

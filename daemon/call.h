@@ -137,6 +137,7 @@ struct stream_fd {
 	struct call		*call;		/* RO */
 	struct packet_stream	*stream;	/* LOCK: call->master_lock */
 	struct crypto_context	crypto;		/* IN direction, LOCK: stream->in_lock */
+	struct dtls_connection	dtls;		/* LOCK: stream->in_lock */
 };
 
 struct endpoint_map {
@@ -163,7 +164,6 @@ struct packet_stream {
 	struct endpoint		endpoint;	/* LOCK: out_lock */
 	struct endpoint		advertised_endpoint; /* RO */
 	struct crypto_context	crypto;		/* OUT direction, LOCK: out_lock */
-	struct dtls_connection	dtls;
 
 	struct stats		stats;		/* LOCK: in_lock */
 	struct stats		kernel_stats;	/* LOCK: in_lock */
