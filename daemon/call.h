@@ -171,6 +171,7 @@ struct packet_stream {
 
 	/* in_lock must be held for SETTING these: */
 	/* (XXX replace with atomic ops where appropriate) */
+	int			rtp:1;
 	int			rtcp:1;	
 	int			implicit_rtcp:1;
 	int			stun:1;	
