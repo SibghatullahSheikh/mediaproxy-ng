@@ -728,6 +728,10 @@ static void call_timer_iterator(void *key, void *val, void *ptr) {
 		sfd = ps->sfd;
 		if (!sfd)
 			goto next;
+
+		if (sfd->dtls.init && !sfd->dtls.connected)
+			dtls(ps, NULL, NULL);
+
 		if (hlp->ports[sfd->fd.localport])
 			goto next;
 		hlp->ports[sfd->fd.localport] = sfd;
