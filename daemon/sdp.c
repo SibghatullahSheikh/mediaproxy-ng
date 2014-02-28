@@ -98,7 +98,7 @@ struct attribute_crypto {
 	const struct crypto_suite *crypto_suite;
 	str master_key;
 	str salt;
-	char key_salt_buf[30];
+	char key_salt_buf[SRTP_MAX_MASTER_KEY_LEN + SRTP_MAX_MASTER_SALT_LEN];
 	u_int64_t lifetime;
 	unsigned char mki[256];
 	unsigned int mki_len;
@@ -434,7 +434,6 @@ static int parse_attribute_crypto(struct sdp_attribute *output) {
 		goto error;
 	salt_key_len = c->crypto_suite->master_key_len
 			+ c->crypto_suite->master_salt_len;
-	assert(sizeof(c->key_salt_buf) >= salt_key_len);
 	enc_salt_key_len = ceil((double) salt_key_len * 4.0/3.0);
 
 	err = "invalid key parameter length";
@@ -1490,7 +1489,7 @@ static int has_ice(GQueue *sessions) {
 }
 
 static void insert_dtls(struct call_media *media, struct sdp_chopper *chop) {
-	char hexbuf[DTLS_MAX_DIGEST_LEN * 3 + 1];
+	char hexbuf[DTLS_MAX_DIGEST_LEN * 3 + 2];
 	unsigned char *p;
 	char *o;
 	int i;
@@ -1502,7 +1501,6 @@ static void insert_dtls(struct call_media *media, struct sdp_chopper *chop) {
 
 	hf = media->dtls_cert->fingerprint.hash_func;
 
-	assert(sizeof(hexbuf) >= hf->num_bytes * 3);
 	assert(hf->num_bytes > 0);
 
 	p = media->dtls_cert->fingerprint.digest;
@@ -1531,7 +1529,7 @@ static void insert_dtls(struct call_media *media, struct sdp_chopper *chop) {
 }
 
 static void insert_crypto(struct call_media *media, struct sdp_chopper *chop) {
-	char b64_buf[64];
+	char b64_buf[((SRTP_MAX_MASTER_KEY_LEN + SRTP_MAX_MASTER_SALT_LEN) / 3 + 1) * 4 + 4];
 	char *p;
 	int state = 0, save = 0, i;
 	struct crypto_params *cp = &media->sdes_out.params;
@@ -1548,9 +1546,6 @@ static void insert_crypto(struct call_media *media, struct sdp_chopper *chop) {
 			cp->crypto_suite->master_salt_len, 0,
 			p, &state, &save);
 	p += g_base64_encode_close(0, p, &state, &save);
-
-	assert(sizeof(b64_buf) >= (((cp->crypto_suite->master_key_len
-				+ cp->crypto_suite->master_salt_len)) / 3 + 1) * 4 + 4);
 
 	chopper_append_c(chop, "a=crypto:");
 	chopper_append_printf(chop, "%u ", media->sdes_out.tag);

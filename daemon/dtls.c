@@ -298,12 +298,25 @@ static int try_connect(struct dtls_connection *d) {
 
 	code = SSL_get_error(d->ssl, ret);
 
-	if (code == SSL_ERROR_NONE) {
-		mylog(LOG_DEBUG, "DTLS handshake successful");
-		d->connected = 1;
+	ret = 0;
+	switch (code) {
+		case SSL_ERROR_NONE:
+			mylog(LOG_DEBUG, "DTLS handshake successful");
+			d->connected = 1;
+			ret = 1;
+			break;
+
+		case SSL_ERROR_WANT_READ:
+		case SSL_ERROR_WANT_WRITE:
+			break;
+
+		default:
+			mylog(LOG_ERROR, "DTLS error: %i", code);
+			ret = -1;
+			break;
 	}
 
-	return 0;
+	return ret;
 }
 
 int dtls_connection_init(struct packet_stream *ps, int active, struct dtls_cert *cert) {
@@ -368,6 +381,76 @@ error:
 	return -1;
 }
 
+static int dtls_setup_crypto(struct packet_stream *ps, struct dtls_connection *d) {
+	const char *err;
+	SRTP_PROTECTION_PROFILE *spp;
+	int i;
+	const struct crypto_suite *cs;
+	unsigned char keys[2 * (SRTP_MAX_MASTER_KEY_LEN + SRTP_MAX_MASTER_SALT_LEN)];
+	struct crypto_params client, server;
+
+	err = "no SRTP protection profile negotiated";
+	spp = SSL_get_selected_srtp_profile(d->ssl);
+	if (!spp)
+		goto error;
+
+	for (i = 0; i < num_crypto_suites; i++) {
+		cs = &crypto_suites[i];
+		if (!cs->dtls_name)
+			continue;
+		if (!strcmp(cs->dtls_name, spp->name))
+			goto found;
+	}
+
+	err = "unknown SRTP protection profile negotiated";
+	goto error;
+
+found:
+	i = SSL_export_keying_material(d->ssl, keys, sizeof(keys), "EXTRACTOR-dtls_srtp",
+			strlen("EXTRACTOR-dtls_srtp"), NULL, 0, 0);
+	err = "failed to export keying material";
+	if (i != 1)
+		goto error;
+
+	/* got everything XXX except MKI */
+	ZERO(client);
+	ZERO(server);
+	i = 0;
+
+	client.crypto_suite = server.crypto_suite = cs;
+
+	memcpy(client.master_key, &keys[i], cs->master_key_len);
+	i += cs->master_key_len;
+	memcpy(server.master_key, &keys[i], cs->master_key_len);
+	i += cs->master_key_len;
+	memcpy(client.master_salt, &keys[i], cs->master_salt_len);
+	i += cs->master_salt_len;
+	memcpy(server.master_salt, &keys[i], cs->master_salt_len);
+
+	mylog(LOG_INFO, "DTLS-SRTP successfully negotiated");
+
+	if (d->active) {
+		/* we're the client */
+		crypto_init(&ps->crypto, &client);
+		crypto_init(&ps->sfd->crypto, &server);
+	}
+	else {
+		/* we're the server */
+		crypto_init(&ps->crypto, &server);
+		crypto_init(&ps->sfd->crypto, &client);
+	}
+
+	return 0;
+
+error:
+	if (!spp)
+		mylog(LOG_ERROR, "Failed to set up SRTP after DTLS negotiation: %s", err);
+	else
+		mylog(LOG_ERROR, "Failed to set up SRTP after DTLS negotiation: %s (profile \"%s\")",
+				err, spp->name);
+	return -1;
+}
+
 int dtls(struct packet_stream *ps, const str *s, struct sockaddr_in6 *fsin) {
 	struct dtls_connection *d = &ps->sfd->dtls;
 	int ret;
@@ -382,7 +465,18 @@ int dtls(struct packet_stream *ps, const str *s, struct sockaddr_in6 *fsin) {
 	if (s)
 		BIO_write(d->r_bio, s->s, s->len);
 
-	try_connect(d);
+	ret = try_connect(d);
+	if (ret == -1) {
+		/* fatal error */
+		d->init = 0;
+		/* XXX ?? */
+		return 0;
+	}
+	else if (ret == 1) {
+		/* connected! */
+		if (dtls_setup_crypto(ps, d))
+			/* XXX ?? */ ;
+	}
 
 	ret = BIO_ctrl_pending(d->w_bio);
 	if (ret <= 0)
