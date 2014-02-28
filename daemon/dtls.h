@@ -12,6 +12,11 @@
 
 
 
+#define DTLS_MAX_DIGEST_LEN 64
+
+
+
+
 struct packet_stream;
 struct sockaddr_in6;
 
@@ -24,7 +29,7 @@ struct dtls_hash_func {
 };
 
 struct dtls_fingerprint {
-	unsigned char digest[64];
+	unsigned char digest[DTLS_MAX_DIGEST_LEN];
 	const struct dtls_hash_func *hash_func;
 };
 
@@ -57,12 +62,19 @@ int dtls(struct packet_stream *, const str *s, struct sockaddr_in6 *sin);
 
 
 
-static inline void dtls_hash(struct dtls_fingerprint *fp, X509 *cert) {
+static inline void __dtls_hash(const struct dtls_hash_func *hash_func, X509 *cert, unsigned char *out,
+		unsigned int bufsize)
+{
 	unsigned int n;
 
-	assert(sizeof(fp->digest) >= fp->hash_func->num_bytes);
-	n = fp->hash_func->__func(fp->digest, cert);
-	assert(n == fp->hash_func->num_bytes);
+	assert(bufsize >= hash_func->num_bytes);
+	n = hash_func->__func(out, cert);
+	assert(n == hash_func->num_bytes);
+}
+#define dtls_hash(hash_func, cert, outbuf) __dtls_hash(hash_func, cert, outbuf, sizeof(outbuf))
+
+static inline void dtls_fingerprint_hash(struct dtls_fingerprint *fp, X509 *cert) {
+	__dtls_hash(fp->hash_func, cert, fp->digest, sizeof(fp->digest));
 }
 
 static inline int is_dtls(const str *s) {

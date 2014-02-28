@@ -176,7 +176,7 @@ static int cert_init() {
 	/* digest */
 
 	__dtls_cert.fingerprint.hash_func = &hash_funcs[0];
-	dtls_hash(&__dtls_cert.fingerprint, x509);
+	dtls_fingerprint_hash(&__dtls_cert.fingerprint, x509);
 
 	__dtls_cert.x509 = x509;
 	__dtls_cert.pkey = pkey;
@@ -252,7 +252,36 @@ struct dtls_cert *dtls_cert() {
 }
 
 static int verify_callback(int ok, X509_STORE_CTX *store) {
-	// XXX
+	SSL *ssl;
+	struct stream_fd *sfd;
+	struct packet_stream *ps;
+	struct call_media *media;
+	X509 *cert;
+	unsigned char fp[DTLS_MAX_DIGEST_LEN];
+
+	ssl = X509_STORE_CTX_get_ex_data(store, SSL_get_ex_data_X509_STORE_CTX_idx());
+	sfd = SSL_get_app_data(ssl);
+	if (sfd->dtls.ssl != ssl)
+		return 0;
+	ps = sfd->stream;
+	if (!ps)
+		return 0;
+	media = ps->media;
+	if (!media)
+		return 0;
+	if (!media->fingerprint.hash_func)
+		return 0;
+
+	cert = X509_STORE_CTX_get_current_cert(store);
+	dtls_hash(media->fingerprint.hash_func, cert, fp);
+
+	if (memcmp(media->fingerprint.digest, fp, media->fingerprint.hash_func->num_bytes)) {
+		mylog(LOG_WARNING, "Peer certificate rejected - fingerprint mismatch");
+		return 0;
+	}
+
+	mylog(LOG_INFO, "Peer certificate accepted");
+
 	return 1;
 }
 
@@ -312,6 +341,7 @@ int dtls_connection_init(struct packet_stream *ps, int active, struct dtls_cert 
 	if (!d->r_bio || !d->w_bio)
 		goto error;
 
+	SSL_set_app_data(d->ssl, ps->sfd); /* XXX obj reference here? */
 	SSL_set_bio(d->ssl, d->r_bio, d->w_bio);
 	SSL_set_mode(d->ssl, SSL_MODE_ENABLE_PARTIAL_WRITE | SSL_MODE_ACCEPT_MOVING_WRITE_BUFFER);
 

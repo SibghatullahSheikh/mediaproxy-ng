@@ -125,7 +125,7 @@ struct attribute_fingerprint {
 	str fingerprint_str;
 
 	const struct dtls_hash_func *hash_func;
-	unsigned char fingerprint[64];
+	unsigned char fingerprint[DTLS_MAX_DIGEST_LEN];
 };
 
 struct attribute_setup {
@@ -1490,7 +1490,7 @@ static int has_ice(GQueue *sessions) {
 }
 
 static void insert_dtls(struct call_media *media, struct sdp_chopper *chop) {
-	char hexbuf[64 * 3 + 1];
+	char hexbuf[DTLS_MAX_DIGEST_LEN * 3 + 1];
 	unsigned char *p;
 	char *o;
 	int i;
