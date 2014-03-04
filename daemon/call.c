@@ -273,7 +273,7 @@ void kernelize(struct packet_stream *stream) {
 	stream->handler->in->kernel(&mpt.decrypt, stream);
 	stream->handler->out->kernel(&mpt.encrypt, sink);
 
-	mutex_unlock(&stream->out_lock);
+	mutex_unlock(&sink->out_lock);
 
 	if (!mpt.encrypt.cipher || !mpt.encrypt.hmac)
 		goto no_kernel;
