@@ -175,7 +175,7 @@ static const struct streamhandler __sh_savpf2savp = {
 
 /* ********** */
 
-static const struct streamhandler *__sh_matrix_in_rtp_avp[num_transport_protocols] = {
+static const struct streamhandler *__sh_matrix_in_rtp_avp[] = {
 	[PROTO_RTP_AVP]			= &__sh_noop,
 	[PROTO_RTP_AVPF]		= &__sh_noop,
 	[PROTO_RTP_SAVP]		= &__sh_avp2savp,
@@ -183,7 +183,7 @@ static const struct streamhandler *__sh_matrix_in_rtp_avp[num_transport_protocol
 	[PROTO_UDP_TLS_RTP_SAVP]	= &__sh_avp2savp,
 	[PROTO_UDP_TLS_RTP_SAVPF]	= &__sh_avp2savp,
 };
-static const struct streamhandler *__sh_matrix_in_rtp_avpf[num_transport_protocols] = {
+static const struct streamhandler *__sh_matrix_in_rtp_avpf[] = {
 	[PROTO_RTP_AVP]			= &__sh_avpf2avp,
 	[PROTO_RTP_AVPF]		= &__sh_noop,
 	[PROTO_RTP_SAVP]		= &__sh_avpf2savp,
@@ -191,7 +191,7 @@ static const struct streamhandler *__sh_matrix_in_rtp_avpf[num_transport_protoco
 	[PROTO_UDP_TLS_RTP_SAVP]	= &__sh_avpf2savp,
 	[PROTO_UDP_TLS_RTP_SAVPF]	= &__sh_avp2savp,
 };
-static const struct streamhandler *__sh_matrix_in_rtp_savp[num_transport_protocols] = {
+static const struct streamhandler *__sh_matrix_in_rtp_savp[] = {
 	[PROTO_RTP_AVP]			= &__sh_savp2avp,
 	[PROTO_RTP_AVPF]		= &__sh_savp2avp,
 	[PROTO_RTP_SAVP]		= &__sh_noop,
@@ -199,7 +199,7 @@ static const struct streamhandler *__sh_matrix_in_rtp_savp[num_transport_protoco
 	[PROTO_UDP_TLS_RTP_SAVP]	= &__sh_noop,
 	[PROTO_UDP_TLS_RTP_SAVPF]	= &__sh_noop,
 };
-static const struct streamhandler *__sh_matrix_in_rtp_savpf[num_transport_protocols] = {
+static const struct streamhandler *__sh_matrix_in_rtp_savpf[] = {
 	[PROTO_RTP_AVP]			= &__sh_savpf2avp,
 	[PROTO_RTP_AVPF]		= &__sh_savp2avp,
 	[PROTO_RTP_SAVP]		= &__sh_savpf2savp,
@@ -210,7 +210,7 @@ static const struct streamhandler *__sh_matrix_in_rtp_savpf[num_transport_protoc
 
 /* ********** */
 
-static const struct streamhandler **__sh_matrix[num_transport_protocols] = {
+static const struct streamhandler **__sh_matrix[] = {
 	[PROTO_RTP_AVP]			= __sh_matrix_in_rtp_avp,
 	[PROTO_RTP_AVPF]		= __sh_matrix_in_rtp_avpf,
 	[PROTO_RTP_SAVP]		= __sh_matrix_in_rtp_savp,
