@@ -1156,14 +1156,13 @@ static int replace_transport_protocol(struct sdp_chopper *chop,
 		struct sdp_media *media, struct call_media *cm)
 {
 	str *tp = &media->transport;
-	const char *new_tp = transport_protocol_strings[cm->protocol];
 
-	if (!new_tp)
+	if (!cm->protocol)
 		return 0; /* XXX correct? or give warning? */
 
 	if (copy_up_to(chop, tp))
 		return -1;
-	chopper_append_c(chop, new_tp);
+	chopper_append_c(chop, cm->protocol->name);
 	if (skip_over(chop, tp))
 		return -1;
 

@@ -58,12 +58,45 @@ struct streamhandler {
 	const struct streamhandler_io	*out;
 };
 
-const char *transport_protocol_strings[__PROTO_LAST] = {
-	[PROTO_RTP_AVP]		= "RTP/AVP",
-	[PROTO_RTP_SAVP]	= "RTP/SAVP",
-	[PROTO_RTP_AVPF]	= "RTP/AVPF",
-	[PROTO_RTP_SAVPF]	= "RTP/SAVPF",
+const struct transport_protocol transport_protocols[] = {
+	[PROTO_RTP_AVP] = {
+		.index		= PROTO_RTP_AVP,
+		.name		= "RTP/AVP",
+		.srtp		= 0,
+		.avpf		= 0,
+	},
+	[PROTO_RTP_SAVP] = {
+		.index		= PROTO_RTP_SAVP,
+		.name		= "RTP/SAVP",
+		.srtp		= 1,
+		.avpf		= 0,
+	},
+	[PROTO_RTP_AVPF] = {
+		.index		= PROTO_RTP_AVPF,
+		.name		= "RTP/AVPF",
+		.srtp		= 0,
+		.avpf		= 1,
+	},
+	[PROTO_RTP_SAVPF] = {
+		.index		= PROTO_RTP_SAVPF,
+		.name		= "RTP/SAVPF",
+		.srtp		= 1,
+		.avpf		= 1,
+	},
+	[PROTO_UDP_TLS_RTP_SAVP] = {
+		.index		= PROTO_UDP_TLS_RTP_SAVP,
+		.name		= "UDP/TLS/RTP/SAVP",
+		.srtp		= 1,
+		.avpf		= 0,
+	},
+	[PROTO_UDP_TLS_RTP_SAVPF] = {
+		.index		= PROTO_UDP_TLS_RTP_SAVPF,
+		.name		= "UDP/TLS/RTP/SAVPF",
+		.srtp		= 1,
+		.avpf		= 1,
+	},
 };
+const int num_transport_protocols = G_N_ELEMENTS(transport_protocols);
 
 
 
@@ -142,38 +175,48 @@ static const struct streamhandler __sh_savpf2savp = {
 
 /* ********** */
 
-static const struct streamhandler *__sh_matrix_in_rtp_avp[__PROTO_LAST] = {
-	[PROTO_RTP_AVP]		= &__sh_noop,
-	[PROTO_RTP_AVPF]	= &__sh_noop,
-	[PROTO_RTP_SAVP]	= &__sh_avp2savp,
-	[PROTO_RTP_SAVPF]	= &__sh_avp2savp,
+static const struct streamhandler *__sh_matrix_in_rtp_avp[num_transport_protocols] = {
+	[PROTO_RTP_AVP]			= &__sh_noop,
+	[PROTO_RTP_AVPF]		= &__sh_noop,
+	[PROTO_RTP_SAVP]		= &__sh_avp2savp,
+	[PROTO_RTP_SAVPF]		= &__sh_avp2savp,
+	[PROTO_UDP_TLS_RTP_SAVP]	= &__sh_avp2savp,
+	[PROTO_UDP_TLS_RTP_SAVPF]	= &__sh_avp2savp,
 };
-static const struct streamhandler *__sh_matrix_in_rtp_avpf[__PROTO_LAST] = {
-	[PROTO_RTP_AVP]		= &__sh_avpf2avp,
-	[PROTO_RTP_AVPF]	= &__sh_noop,
-	[PROTO_RTP_SAVP]	= &__sh_avpf2savp,
-	[PROTO_RTP_SAVPF]	= &__sh_avp2savp,
+static const struct streamhandler *__sh_matrix_in_rtp_avpf[num_transport_protocols] = {
+	[PROTO_RTP_AVP]			= &__sh_avpf2avp,
+	[PROTO_RTP_AVPF]		= &__sh_noop,
+	[PROTO_RTP_SAVP]		= &__sh_avpf2savp,
+	[PROTO_RTP_SAVPF]		= &__sh_avp2savp,
+	[PROTO_UDP_TLS_RTP_SAVP]	= &__sh_avpf2savp,
+	[PROTO_UDP_TLS_RTP_SAVPF]	= &__sh_avp2savp,
 };
-static const struct streamhandler *__sh_matrix_in_rtp_savp[__PROTO_LAST] = {
-	[PROTO_RTP_AVP]		= &__sh_savp2avp,
-	[PROTO_RTP_AVPF]	= &__sh_savp2avp,
-	[PROTO_RTP_SAVP]	= &__sh_noop,
-	[PROTO_RTP_SAVPF]	= &__sh_noop,
+static const struct streamhandler *__sh_matrix_in_rtp_savp[num_transport_protocols] = {
+	[PROTO_RTP_AVP]			= &__sh_savp2avp,
+	[PROTO_RTP_AVPF]		= &__sh_savp2avp,
+	[PROTO_RTP_SAVP]		= &__sh_noop,
+	[PROTO_RTP_SAVPF]		= &__sh_noop,
+	[PROTO_UDP_TLS_RTP_SAVP]	= &__sh_noop,
+	[PROTO_UDP_TLS_RTP_SAVPF]	= &__sh_noop,
 };
-static const struct streamhandler *__sh_matrix_in_rtp_savpf[__PROTO_LAST] = {
-	[PROTO_RTP_AVP]		= &__sh_savpf2avp,
-	[PROTO_RTP_AVPF]	= &__sh_savp2avp,
-	[PROTO_RTP_SAVP]	= &__sh_savpf2savp,
-	[PROTO_RTP_SAVPF]	= &__sh_noop,
+static const struct streamhandler *__sh_matrix_in_rtp_savpf[num_transport_protocols] = {
+	[PROTO_RTP_AVP]			= &__sh_savpf2avp,
+	[PROTO_RTP_AVPF]		= &__sh_savp2avp,
+	[PROTO_RTP_SAVP]		= &__sh_savpf2savp,
+	[PROTO_RTP_SAVPF]		= &__sh_noop,
+	[PROTO_UDP_TLS_RTP_SAVP]	= &__sh_savpf2savp,
+	[PROTO_UDP_TLS_RTP_SAVPF]	= &__sh_noop,
 };
 
 /* ********** */
 
-static const struct streamhandler **__sh_matrix[__PROTO_LAST] = {
-	[PROTO_RTP_AVP]		= __sh_matrix_in_rtp_avp,
-	[PROTO_RTP_AVPF]	= __sh_matrix_in_rtp_avpf,
-	[PROTO_RTP_SAVP]	= __sh_matrix_in_rtp_savp,
-	[PROTO_RTP_SAVPF]	= __sh_matrix_in_rtp_savpf,
+static const struct streamhandler **__sh_matrix[num_transport_protocols] = {
+	[PROTO_RTP_AVP]			= __sh_matrix_in_rtp_avp,
+	[PROTO_RTP_AVPF]		= __sh_matrix_in_rtp_avpf,
+	[PROTO_RTP_SAVP]		= __sh_matrix_in_rtp_savp,
+	[PROTO_RTP_SAVPF]		= __sh_matrix_in_rtp_savpf,
+	[PROTO_UDP_TLS_RTP_SAVP]	= __sh_matrix_in_rtp_savp,
+	[PROTO_UDP_TLS_RTP_SAVPF]	= __sh_matrix_in_rtp_savpf,
 };
 
 /* ********** */
@@ -361,15 +404,15 @@ static void determine_handler(struct packet_stream *in, const struct packet_stre
 	if (in->has_handler)
 		return;
 
-	if (in->media->protocol == PROTO_UNKNOWN)
+	if (!in->media->protocol)
 		goto err;
-	if (out->media->protocol == PROTO_UNKNOWN)
+	if (!out->media->protocol)
 		goto err;
 
-	sh_pp = __sh_matrix[in->media->protocol];
+	sh_pp = __sh_matrix[in->media->protocol->index];
 	if (!sh_pp)
 		goto err;
-	sh = sh_pp[out->media->protocol];
+	sh = sh_pp[out->media->protocol->index];
 	if (!sh)
 		goto err;
 	in->handler = sh;
@@ -1455,7 +1498,7 @@ static void __generate_crypto(const struct sdp_ng_flags *flags, struct call_medi
 	if (!flags)
 		return;
 
-	if (this->protocol != PROTO_RTP_SAVP && this->protocol != PROTO_RTP_SAVPF) {
+	if (!this->protocol || !this->protocol->srtp) {
 		cp->crypto_suite = NULL;
 		this->dtls_cert = NULL;
 		this->setup_passive = 0;
@@ -1605,15 +1648,15 @@ int monologue_offer_answer(struct call_monologue *monologue, GQueue *streams,
 		 * offerer or WAS sent to the answerer. */
 
 		/* deduct protocol from stream parameters received */
-		if (other_media->protocol == PROTO_UNKNOWN) {
+		if (!other_media->protocol) {
 			other_media->protocol = sp->protocol;
-			if (other_media->protocol == PROTO_UNKNOWN)
-				other_media->protocol = PROTO_RTP_AVP;
+			if (!other_media->protocol)
+				other_media->protocol = &transport_protocols[PROTO_RTP_AVP];
 		}
 		/* allow override of outgoing protocol even if we know it already */
-		if (flags && flags->transport_protocol != PROTO_UNKNOWN)
+		if (flags && flags->transport_protocol)
 			media->protocol = flags->transport_protocol;
-		else if (media->protocol == PROTO_UNKNOWN)
+		else if (!media->protocol)
 			media->protocol = other_media->protocol;
 
 		/* copy parameters advertised by the sender of this message */
@@ -2335,20 +2378,20 @@ void calls_dump_redis(struct callmaster *m) {
 	mylog(LOG_DEBUG, "Finished dumping all call data to Redis\n");
 }
 
-enum transport_protocol transport_protocol(const str *s) {
+const struct transport_protocol *transport_protocol(const str *s) {
 	int i;
 
 	if (!s || !s->s)
 		goto out;
 
-	for (i = PROTO_UNKNOWN + 1; i < __PROTO_LAST; i++) {
-		if (strlen(transport_protocol_strings[i]) != s->len)
+	for (i = 0; i < num_transport_protocols; i++) {
+		if (strlen(transport_protocols[i].name) != s->len)
 			continue;
-		if (strncasecmp(transport_protocol_strings[i], s->s, s->len))
+		if (strncasecmp(transport_protocols[i].name, s->s, s->len))
 			continue;
-		return i;
+		return &transport_protocols[i];
 	}
 
 out:
-	return PROTO_UNKNOWN;
+	return NULL;
 }

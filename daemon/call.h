@@ -29,14 +29,13 @@ enum call_opmode {
 	OP_OTHER,
 };
 
-enum transport_protocol {
-	PROTO_UNKNOWN = 0,
-	PROTO_RTP_AVP,
+enum transport_protocol_index {
+	PROTO_RTP_AVP = 0,
 	PROTO_RTP_SAVP,
 	PROTO_RTP_AVPF,
 	PROTO_RTP_SAVPF,
-
-	__PROTO_LAST
+	PROTO_UDP_TLS_RTP_SAVP,
+	PROTO_UDP_TLS_RTP_SAVPF,
 };
 
 struct call_monologue;
@@ -92,7 +91,16 @@ typedef bencode_buffer_t call_buffer_t;
 
 
 
-extern const char *transport_protocol_strings[__PROTO_LAST];
+struct transport_protocol {
+	enum transport_protocol_index	index;
+	const char			*name;
+	int				srtp:1;
+	int				avpf:1;
+};
+extern const struct transport_protocol transport_protocols[];
+
+
+
 
 struct stats {
 	u_int64_t			packets;
@@ -114,7 +122,7 @@ struct stream_params {
 	struct endpoint		rtp_endpoint;
 	struct endpoint		rtcp_endpoint;
 	unsigned int		consecutive_ports;
-	enum transport_protocol	protocol;
+	const struct transport_protocol *protocol;
 	struct crypto_params	crypto;
 	unsigned int		sdes_tag;
 	enum stream_direction	direction[2];
@@ -189,7 +197,7 @@ struct call_media {
 
 	unsigned int		index;		/* RO */
 	str			type;		/* RO */
-	enum transport_protocol	protocol;
+	const struct transport_protocol *protocol;
 	int			desired_family;
 
 	str			ice_ufrag;
@@ -333,7 +341,7 @@ void kernelize(struct packet_stream *);
 int call_stream_address_alt(char *, struct packet_stream *, enum stream_address_format, int *);
 int call_stream_address(char *, struct packet_stream *, enum stream_address_format, int *);
 
-enum transport_protocol transport_protocol(const str *s);
+const struct transport_protocol *transport_protocol(const str *s);
 
 
 
