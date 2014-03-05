@@ -1401,7 +1401,7 @@ static void __init_stream(struct packet_stream *ps) {
 	if (ps->sfd) {
 		crypto_init(&ps->sfd->crypto, &media->sdes_in.params);
 
-		if ((media->setup_passive || media->setup_active) && ps->rtp
+		if ((media->setup_passive || media->setup_active) && !ps->fallback_rtcp
 				&& media->fingerprint.hash_func)
 		{
 			if (!media->dtls_cert)
@@ -1466,6 +1466,7 @@ static void __init_streams(struct call_media *A, struct call_media *B, const str
 		a->rtp = 0;
 		a->rtcp = 1;
 		a->rtcp_sibling = NULL;
+		a->fallback_rtcp = !ax->rtcp;
 
 		ax->rtcp_sibling = a;
 

@@ -182,6 +182,7 @@ struct packet_stream {
 	int			rtp:1;
 	int			rtcp:1;	
 	int			implicit_rtcp:1;
+	int			fallback_rtcp:1;
 	int			stun:1;	
 	int			filled:1;
 	int			confirmed:1;
