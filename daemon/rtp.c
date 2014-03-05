@@ -21,12 +21,15 @@ struct rtp_extension {
 
 static inline int check_session_keys(struct crypto_context *c) {
 	str s;
+	const char *err;
 
 	if (c->have_session_key)
 		return 0;
+	err = "SRTP output wanted, but no crypto suite was negotiated";
 	if (!c->params.crypto_suite)
 		goto error;
 
+	err = "Failed to generate SRTP session keys";
 	str_init_len_assert(&s, c->session_key, c->params.crypto_suite->session_key_len);
 	if (crypto_gen_session_key(c, &s, 0x00, 6))
 		goto error;
@@ -43,8 +46,7 @@ static inline int check_session_keys(struct crypto_context *c) {
 	return 0;
 
 error:
-	mylog(LOG_ERROR, "Error generating SRTP session keys");
-	assert(0);
+	mylog(LOG_ERROR, "%s", err);
 	return -1;
 }
 

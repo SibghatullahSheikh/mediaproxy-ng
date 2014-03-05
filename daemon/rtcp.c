@@ -332,12 +332,15 @@ int rtcp_avpf2avp(str *s) {
 
 static inline int check_session_keys(struct crypto_context *c) {
 	str s;
+	const char *err;
 
 	if (c->have_session_key)
 		return 0;
+	err = "SRTCP output wanted, but no crypto suite was negotiated";
 	if (!c->params.crypto_suite)
 		goto error;
 
+	err = "Failed to generate SRTCP session keys";
 	str_init_len_assert(&s, c->session_key, c->params.crypto_suite->session_key_len);
 	if (crypto_gen_session_key(c, &s, 0x03, SRTCP_R_LENGTH))
 		goto error;
@@ -354,7 +357,7 @@ static inline int check_session_keys(struct crypto_context *c) {
 	return 0;
 
 error:
-	mylog(LOG_ERROR, "Error generating SRTCP session keys");
+	mylog(LOG_ERROR, "%s", err);
 	return -1;
 }
 
