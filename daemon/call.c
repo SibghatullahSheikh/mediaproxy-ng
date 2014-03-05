@@ -1516,6 +1516,13 @@ static void __generate_crypto(const struct sdp_ng_flags *flags, struct call_medi
 		/* if we can be active, we will, otherwise we'll be passive */
 		if (this->setup_active)
 			this->setup_passive = 0;
+
+		/* if we're answering and doing DTLS, then skip the SDES stuff */
+		if (this->fingerprint.hash_func && (this->setup_active || this->setup_passive)) {
+			this->sdes_in.params.crypto_suite = NULL;
+			this->sdes_out.params.crypto_suite = NULL;
+			goto skip_sdes;
+		}
 	}
 
 	/* for answer case, otherwise defaults to zero */
@@ -1538,6 +1545,9 @@ static void __generate_crypto(const struct sdp_ng_flags *flags, struct call_medi
 	random_string((unsigned char *) cp->master_salt,
 			cp->crypto_suite->master_salt_len);
 	/* mki = mki_len = 0 */
+
+skip_sdes:
+	;
 }
 
 
