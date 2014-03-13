@@ -493,7 +493,9 @@ static int stream_packet(struct stream_fd *sfd, str *s, struct sockaddr_in6 *fsi
 		goto done;
 
 	if (stream->sfd->dtls.init && is_dtls(s)) {
-		dtls(stream, s, fsin);
+		ret = dtls(stream, s, fsin);
+		if (!ret)
+			goto done;
 	}
 
 	if (stream->stun && is_stun(s)) {
