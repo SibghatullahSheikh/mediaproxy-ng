@@ -1466,7 +1466,7 @@ static void __init_streams(struct call_media *A, struct call_media *B, const str
 		a->rtp = 0;
 		a->rtcp = 1;
 		a->rtcp_sibling = NULL;
-		a->fallback_rtcp = !ax->rtcp;
+		a->fallback_rtcp = ax->rtcp;
 
 		ax->rtcp_sibling = a;
 
