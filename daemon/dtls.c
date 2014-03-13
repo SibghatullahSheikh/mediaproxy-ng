@@ -289,6 +289,13 @@ static int verify_callback(int ok, X509_STORE_CTX *store) {
 
 	if (memcmp(media->fingerprint.digest, fp, media->fingerprint.hash_func->num_bytes)) {
 		mylog(LOG_WARNING, "Peer certificate rejected - fingerprint mismatch");
+		__DBG("fingerprint expected: %02x%02x%02x%02x%02x%02x%02x%02x received: %02x%02x%02x%02x%02x%02x%02x%02x",
+			media->fingerprint.digest[0], media->fingerprint.digest[1],
+			media->fingerprint.digest[2], media->fingerprint.digest[3],
+			media->fingerprint.digest[4], media->fingerprint.digest[5],
+			media->fingerprint.digest[6], media->fingerprint.digest[7], 
+			fp[0], fp[1], fp[2], fp[3],
+			fp[4], fp[5], fp[6], fp[7]);
 		return 0;
 	}
 
@@ -474,10 +481,10 @@ int dtls(struct packet_stream *ps, const str *s, struct sockaddr_in6 *fsin) {
 	if (s)
 		__DBG("dtls packet input: len %u %02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x",
 			s->len,
-			s->s[0], s->s[1], s->s[2], s->s[3],
-			s->s[4], s->s[5], s->s[6], s->s[7],
-			s->s[8], s->s[9], s->s[10], s->s[11],
-			s->s[12], s->s[13], s->s[14], s->s[15]);
+			(unsigned char) s->s[0], (unsigned char) s->s[1], (unsigned char) s->s[2], (unsigned char) s->s[3],
+			(unsigned char) s->s[4], (unsigned char) s->s[5], (unsigned char) s->s[6], (unsigned char) s->s[7],
+			(unsigned char) s->s[8], (unsigned char) s->s[9], (unsigned char) s->s[10], (unsigned char) s->s[11],
+			(unsigned char) s->s[12], (unsigned char) s->s[13], (unsigned char) s->s[14], (unsigned char) s->s[15]);
 
 	if (d->connected)
 		return 0;
