@@ -594,12 +594,14 @@ static int parse_attribute_fingerprint(struct sdp_attribute *output) {
 		else
 			return -1;
 
+		output->u.fingerprint.fingerprint[i] <<= 4;
+
 		if (c[1] >= '0' && c[1] <= '9')
-			output->u.fingerprint.fingerprint[i] = c[1] - '0';
+			output->u.fingerprint.fingerprint[i] |= c[1] - '0';
 		else if (c[1] >= 'a' && c[1] <= 'f')
-			output->u.fingerprint.fingerprint[i] = c[1] - 'a' + 10;
+			output->u.fingerprint.fingerprint[i] |= c[1] - 'a' + 10;
 		else if (c[1] >= 'A' && c[1] <= 'F')
-			output->u.fingerprint.fingerprint[i] = c[1] - 'A' + 10;
+			output->u.fingerprint.fingerprint[i] |= c[1] - 'A' + 10;
 		else
 			return -1;
 
