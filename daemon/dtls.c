@@ -19,6 +19,18 @@
 
 
 
+#define DTLS_DEBUG 1
+
+#if DTLS_DEBUG
+#define __DBG(x...) mylog(LOG_DEBUG, x)
+#else
+#define __DBG(x...) ((void)0)
+#endif
+
+
+
+
+
 static char ciphers_str[1024];
 
 
@@ -459,6 +471,14 @@ int dtls(struct packet_stream *ps, const str *s, struct sockaddr_in6 *fsin) {
 	struct iovec iov;
 	struct sockaddr_in6 sin;
 
+	if (s)
+		__DBG("dtls packet input: len %u %02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x",
+			s->len,
+			s->s[0], s->s[1], s->s[2], s->s[3],
+			s->s[4], s->s[5], s->s[6], s->s[7],
+			s->s[8], s->s[9], s->s[10], s->s[11],
+			s->s[12], s->s[13], s->s[14], s->s[15]);
+
 	if (d->connected)
 		return 0;
 
@@ -491,6 +511,13 @@ int dtls(struct packet_stream *ps, const str *s, struct sockaddr_in6 *fsin) {
 	ret = BIO_read(d->w_bio, buf, ret);
 	if (ret <= 0)
 		return 0;
+
+	__DBG("dtls packet output: len %u %02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x",
+		ret,
+		buf[0], buf[1], buf[2], buf[3],
+		buf[4], buf[5], buf[6], buf[7],
+		buf[8], buf[9], buf[10], buf[11],
+		buf[12], buf[13], buf[14], buf[15]);
 
 	if (!fsin) {
 		ZERO(sin);
