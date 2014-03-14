@@ -516,7 +516,7 @@ static int stream_packet(struct stream_fd *sfd, str *s, struct sockaddr_in6 *fsi
 		sink = stream->rtcp_sink;
 		rtcp = 1;
 	}
-	else {
+	else if (stream->rtcp_sink) {
 		muxed_rtcp = rtcp_demux(s, media);
 		if (muxed_rtcp == 2) {
 			sink = stream->rtcp_sink;
@@ -525,7 +525,7 @@ static int stream_packet(struct stream_fd *sfd, str *s, struct sockaddr_in6 *fsi
 		}
 	}
 	out_srtp = sink;
-	if (rtcp && sink->rtcp_sibling)
+	if (rtcp && sink && sink->rtcp_sibling)
 		out_srtp = sink->rtcp_sibling;
 
 	if (!sink || !sink->sfd || !out_srtp->sfd || !in_srtp->sfd) {
