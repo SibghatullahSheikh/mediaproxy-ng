@@ -59,8 +59,8 @@ struct crypto_suite {
 struct crypto_params {
 	const struct crypto_suite *crypto_suite;
 	/* we only support one master key for now */
-	char master_key[SRTP_MAX_MASTER_KEY_LEN];
-	char master_salt[SRTP_MAX_MASTER_SALT_LEN];
+	unsigned char master_key[SRTP_MAX_MASTER_KEY_LEN];
+	unsigned char master_salt[SRTP_MAX_MASTER_SALT_LEN];
 	unsigned char *mki;
 	unsigned int mki_len;
 };

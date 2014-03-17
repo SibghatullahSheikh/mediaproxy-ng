@@ -209,7 +209,7 @@ const struct crypto_suite *crypto_find_suite(const str *s) {
 
 /* rfc 3711 section 4.1 and 4.1.1
  * "in" and "out" MAY point to the same buffer */
-static void aes_ctr_128(char *out, str *in, EVP_CIPHER_CTX *ecc, const char *iv) {
+static void aes_ctr_128(unsigned char *out, str *in, EVP_CIPHER_CTX *ecc, const unsigned char *iv) {
 	unsigned char ivx[16];
 	unsigned char key_block[16];
 	unsigned char *p, *q;
@@ -257,13 +257,13 @@ done:
 	;
 }
 
-static void aes_ctr_128_no_ctx(char *out, str *in, const char *key, const char *iv) {
+static void aes_ctr_128_no_ctx(unsigned char *out, str *in, const unsigned char *key, const unsigned char *iv) {
 	EVP_CIPHER_CTX ctx;
 	unsigned char block[16];
 	int len;
 
 	EVP_CIPHER_CTX_init(&ctx);
-	EVP_EncryptInit_ex(&ctx, EVP_aes_128_ecb(), NULL, (const unsigned char *) key, NULL);
+	EVP_EncryptInit_ex(&ctx, EVP_aes_128_ecb(), NULL, key, NULL);
 	aes_ctr_128(out, in, &ctx, iv);
 	EVP_EncryptFinal_ex(&ctx, block, &len);
 	EVP_CIPHER_CTX_cleanup(&ctx);
@@ -274,10 +274,10 @@ static void aes_ctr_128_no_ctx(char *out, str *in, const char *key, const char *
  * x: 112 bits
  * n <= 256
  * out->len := n / 8 */
-static void prf_n(str *out, const char *key, const char *x) {
-	char iv[16];
-	char o[32];
-	char in[32];
+static void prf_n(str *out, const unsigned char *key, const unsigned char *x) {
+	unsigned char iv[16];
+	unsigned char o[32];
+	unsigned char in[32];
 	str in_s;
 
 	assert(sizeof(o) >= out->len);
@@ -286,7 +286,7 @@ static void prf_n(str *out, const char *key, const char *x) {
 	memcpy(iv, x, 14);
 	/* iv[14] = iv[15] = 0;   := x << 16 */
 	ZERO(in); /* outputs the key stream */
-	str_init_len(&in_s, in, out->len > 16 ? 32 : 16);
+	str_init_len(&in_s, (void *) in, out->len > 16 ? 32 : 16);
 	aes_ctr_128_no_ctx(o, &in_s, key, iv);
 
 	memcpy(out->s, o, out->len);
@@ -309,7 +309,7 @@ int crypto_gen_session_key(struct crypto_context *c, str *out, unsigned char lab
 	for (i = 13 - index_len; i < 14; i++)
 		x[i] = key_id[i - (13 - index_len)] ^ x[i];
 
-	prf_n(out, c->params.master_key, (char *) x);
+	prf_n(out, c->params.master_key, x);
 
 #if CRYPTO_DEBUG
 	mylog(LOG_DEBUG, "Generated session key: master key "
@@ -353,7 +353,7 @@ static int aes_cm_encrypt(struct crypto_context *c, u_int32_t ssrc, str *s, u_in
 	ivi[2] ^= idxh;
 	ivi[3] ^= idxl;
 
-	aes_ctr_128(s->s, s, c->session_key_ctx[0], (char *) iv);
+	aes_ctr_128((void *) s->s, s, c->session_key_ctx[0], iv);
 
 	return 0;
 }
