@@ -272,6 +272,8 @@ void kernelize(struct packet_stream *stream) {
 		goto no_kernel;
 	if (!stream->rtp)
 		goto no_kernel;
+	if (!stream->sfd)
+		goto no_kernel;
 
 	mylog(LOG_DEBUG, LOG_PREFIX_C "Kernelizing media stream with local port %u",
 			LOG_PARAMS_C(call), stream->sfd->fd.localport);
@@ -301,6 +303,7 @@ void kernelize(struct packet_stream *stream) {
 	mpt.src_addr.port = sink->sfd->fd.localport;
 	mpt.dst_addr.port = sink->endpoint.port;
 	mpt.rtcp_mux = stream->media->rtcp_mux;
+	mpt.dtls = stream->sfd->dtls.init;
 
 	if (IN6_IS_ADDR_V4MAPPED(&sink->endpoint.ip46)) {
 		mpt.src_addr.family = AF_INET;
