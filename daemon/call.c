@@ -270,6 +270,8 @@ void kernelize(struct packet_stream *stream) {
 		return;
 	if (cm->conf.kernelfd < 0 || cm->conf.kernelid == -1)
 		goto no_kernel;
+	if (!stream->rtp)
+		goto no_kernel;
 
 	mylog(LOG_DEBUG, LOG_PREFIX_C "Kernelizing media stream with local port %u",
 			LOG_PARAMS_C(call), stream->sfd->fd.localport);
@@ -1012,6 +1014,7 @@ static void callmaster_timer(void *ptr) {
 		if (sink)
 			mutex_lock(&sink->out_lock);
 
+		/* XXX this only works if the kernel module actually gets to see the packets. */
 		if (sink && sink->crypto.params.crypto_suite
 				&& ke->target.encrypt.last_index - sink->crypto.last_index > 0x4000) {
 			sink->crypto.last_index = ke->target.encrypt.last_index;
