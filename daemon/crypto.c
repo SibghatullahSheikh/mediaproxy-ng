@@ -16,7 +16,7 @@
 
 
 
-#define CRYPTO_DEBUG 0
+#define CRYPTO_DEBUG 1
 
 
 
@@ -318,14 +318,14 @@ int crypto_gen_session_key(struct crypto_context *c, str *out, unsigned char lab
 			"%02x%02x%02x%02x..., "
 			"label %02x, length %i, result "
 			"%02x%02x%02x%02x...",
-			(unsigned char) c->master_key[0],
-			(unsigned char) c->master_key[1],
-			(unsigned char) c->master_key[2],
-			(unsigned char) c->master_key[3],
-			(unsigned char) c->master_salt[0],
-			(unsigned char) c->master_salt[1],
-			(unsigned char) c->master_salt[2],
-			(unsigned char) c->master_salt[3],
+			c->params.master_key[0],
+			c->params.master_key[1],
+			c->params.master_key[2],
+			c->params.master_key[3],
+			c->params.master_salt[0],
+			c->params.master_salt[1],
+			c->params.master_salt[2],
+			c->params.master_salt[3],
 			label, out->len,
 			(unsigned char) out->s[0],
 			(unsigned char) out->s[1],
