@@ -3,11 +3,13 @@
 
 
 
+#include <time.h>
 #include <openssl/x509.h>
 #include <openssl/ssl.h>
 #include <openssl/bio.h>
 
 #include "str.h"
+#include "obj.h"
 
 
 
@@ -19,6 +21,7 @@
 
 struct packet_stream;
 struct sockaddr_in6;
+struct poller;
 
 
 
@@ -34,9 +37,11 @@ struct dtls_fingerprint {
 };
 
 struct dtls_cert {
+	struct obj obj;
 	struct dtls_fingerprint fingerprint;
 	EVP_PKEY *pkey;
 	X509 *x509;
+	time_t expires;
 };
 
 struct dtls_connection {
@@ -51,13 +56,15 @@ struct dtls_connection {
 
 
 
-int dtls_init();
+int dtls_init(void);
+void dtls_timer(struct poller *);
 
 const struct dtls_hash_func *dtls_find_hash_func(const str *);
 struct dtls_cert *dtls_cert(void);
 
 int dtls_connection_init(struct packet_stream *, int active, struct dtls_cert *cert);
 int dtls(struct packet_stream *, const str *s, struct sockaddr_in6 *sin);
+void dtls_connection_cleanup(struct dtls_connection *);
 
 
 

@@ -210,7 +210,6 @@ struct call_media {
 				sdes_out;
 
 	struct dtls_fingerprint fingerprint; /* as received */
-	struct dtls_cert	*dtls_cert; /* for outgoing */
 
 	GQueue			streams; /* normally RTP + RTCP */
 	GSList			*endpoint_maps;
@@ -219,6 +218,7 @@ struct call_media {
 	int			send:1;
 	int			recv:1;
 	int			rtcp_mux:1;
+	int			dtls:1;
 	int			setup_active:1;
 	int			setup_passive:1;
 	int			rtcp_mux_override:1;
@@ -252,6 +252,7 @@ struct call {
 	//GHashTable		*branches;
 	GSList			*streams;
 	GSList			*stream_fds;
+	struct dtls_cert	*dtls_cert; /* for outgoing */
 
 	str			callid;	
 	char			redis_uuid[37];

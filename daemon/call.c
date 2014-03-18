@@ -1266,6 +1266,7 @@ static void stream_fd_free(void *p) {
 
 	release_port(&f->fd, m);
 	crypto_cleanup(&f->crypto);
+	dtls_connection_cleanup(&f->dtls);
 
 	obj_put(f->call);
 }
@@ -1404,19 +1405,17 @@ static void __fill_stream(struct packet_stream *ps, const struct endpoint *ep, u
 
 static void __init_stream(struct packet_stream *ps) {
 	struct call_media *media = ps->media;
+	struct call *call = ps->call;
 	int active;
 
 	if (ps->sfd) {
 		crypto_init(&ps->sfd->crypto, &media->sdes_in.params);
 
-		if ((media->setup_passive || media->setup_active) && !ps->fallback_rtcp
+		if (media->dtls && !ps->fallback_rtcp
 				&& media->fingerprint.hash_func)
 		{
-			if (!media->dtls_cert)
-				media->dtls_cert = dtls_cert();
-
 			active = (ps->filled && media->setup_active);
-			dtls_connection_init(ps, active, media->dtls_cert);
+			dtls_connection_init(ps, active, call->dtls_cert);
 		}
 	}
 
@@ -1509,7 +1508,7 @@ static void __generate_crypto(const struct sdp_ng_flags *flags, struct call_medi
 
 	if (!this->protocol || !this->protocol->srtp) {
 		cp->crypto_suite = NULL;
-		this->dtls_cert = NULL;
+		this->dtls = 0;
 		this->setup_passive = 0;
 		this->setup_active = 0;
 		return;
@@ -1517,6 +1516,7 @@ static void __generate_crypto(const struct sdp_ng_flags *flags, struct call_medi
 
 	if (flags->opmode == OP_OFFER) {
 		/* we always offer actpass */
+		this->dtls = 1;
 		this->setup_passive = 1;
 		this->setup_active = 1;
 	}
@@ -1526,7 +1526,7 @@ static void __generate_crypto(const struct sdp_ng_flags *flags, struct call_medi
 			this->setup_passive = 0;
 
 		/* if we're answering and doing DTLS, then skip the SDES stuff */
-		if (this->fingerprint.hash_func && (this->setup_active || this->setup_passive)) {
+		if (this->fingerprint.hash_func && this->dtls) {
 			this->sdes_in.params.crypto_suite = NULL;
 			this->sdes_out.params.crypto_suite = NULL;
 			goto skip_sdes;
@@ -1967,6 +1967,7 @@ static void __call_free(void *p) {
 	call_buffer_free(&c->buffer);
 	mutex_destroy(&c->buffer_lock);
 	rwlock_destroy(&c->master_lock);
+	obj_put(c->dtls_cert);
 
 	while (c->monologues) {
 		m = c->monologues->data;
@@ -2014,6 +2015,7 @@ static struct call *call_create(const str *callid, struct callmaster *m) {
 	c->tags = g_hash_table_new(str_hash, str_equal);
 	call_str_cpy(c, &c->callid, callid);
 	c->created = poller_now;
+	c->dtls_cert = dtls_cert();
 	return c;
 }
 

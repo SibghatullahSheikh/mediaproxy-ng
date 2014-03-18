@@ -1496,15 +1496,16 @@ static void insert_dtls(struct call_media *media, struct sdp_chopper *chop) {
 	int i;
 	const struct dtls_hash_func *hf;
 	const char *actpass;
+	struct call *call = media->call;
 
-	if (!media->dtls_cert)
+	if (!call->dtls_cert || !media->dtls)
 		return;
 
-	hf = media->dtls_cert->fingerprint.hash_func;
+	hf = call->dtls_cert->fingerprint.hash_func;
 
 	assert(hf->num_bytes > 0);
 
-	p = media->dtls_cert->fingerprint.digest;
+	p = call->dtls_cert->fingerprint.digest;
 	o = hexbuf;
 	for (i = 0; i < hf->num_bytes; i++)
 		o += sprintf(o, "%02X:", *p++);

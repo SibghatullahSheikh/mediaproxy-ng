@@ -442,6 +442,8 @@ void create_everything(struct main_context *ctx) {
 	if (!ctx->m)
 		die("callmaster creation failed\n");
 
+	dtls_timer(ctx->p);
+
 	ZERO(mc);
 	mc.kernelfd = kfd;
 	mc.kernelid = table;

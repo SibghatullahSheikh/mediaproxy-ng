@@ -8,12 +8,14 @@
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <openssl/err.h>
+#include <time.h>
 
 #include "str.h"
 #include "aux.h"
 #include "crypto.h"
 #include "log.h"
 #include "call.h"
+#include "poller.h"
 
 
 
@@ -26,6 +28,11 @@
 #else
 #define __DBG(x...) ((void)0)
 #endif
+
+
+
+
+#define CERT_EXPIRY_TIME (60*60*24*30) /* 30 days */
 
 
 
@@ -76,7 +83,8 @@ const int num_hash_funcs = G_N_ELEMENTS(hash_funcs);
 
 
 
-static struct dtls_cert __dtls_cert;
+static struct dtls_cert *__dtls_cert;
+static rwlock_t __dtls_cert_lock;
 
 
 
@@ -95,103 +103,127 @@ const struct dtls_hash_func *dtls_find_hash_func(const str *s) {
 	return NULL;
 }
 
+static void cert_free(void *p) {
+	struct dtls_cert *cert = p;
+
+	if (cert->pkey)
+		EVP_PKEY_free(cert->pkey);
+	if (cert->x509)
+		X509_free(cert->x509);
+}
 
 static int cert_init() {
-	X509 *x509;
-	EVP_PKEY *pkey;
-	BIGNUM *exponent, *serial_number;
-	RSA *rsa;
+	X509 *x509 = NULL;
+	EVP_PKEY *pkey = NULL;
+	BIGNUM *exponent = NULL, *serial_number = NULL;
+	RSA *rsa = NULL;
 	ASN1_INTEGER *asn1_serial_number;
 	X509_NAME *name;
+	struct dtls_cert *new_cert;
+
+	mylog(LOG_INFO, "Generating new DTLS certificate");
 
 	/* key */
 
 	pkey = EVP_PKEY_new();
 	if (!pkey)
-		return -1;
+		goto err;
 
 	exponent = BN_new();
 	if (!exponent)
-		return -1;
+		goto err;
 
 	rsa = RSA_new();
 	if (!rsa)
-		return -1;
+		goto err;
 
 	if (!BN_set_word(exponent, 0x10001))
-		return -1;
+		goto err;
 
 	if (!RSA_generate_key_ex(rsa, 1024, exponent, NULL))
-		return -1;
+		goto err;
 
 	if (!EVP_PKEY_assign_RSA(pkey, rsa))
-		return -1;
+		goto err;
 
 	/* x509 cert */
 
 	x509 = X509_new();
 	if (!x509)
-		return -1;
+		goto err;
 
 	if (!X509_set_pubkey(x509, pkey))
-		return -1;
+		goto err;
 
 	/* serial */
 
 	serial_number = BN_new();
 	if (!serial_number)
-		return -1;
+		goto err;
 
 	if (!BN_pseudo_rand(serial_number, 64, 0, 0))
-		return -1;
+		goto err;
 
 	asn1_serial_number = X509_get_serialNumber(x509);
 	if (!asn1_serial_number)
-		return -1;
+		goto err;
 
 	if (!BN_to_ASN1_INTEGER(serial_number, asn1_serial_number))
-		return -1;
+		goto err;
 
 	/* version 1 */
 
 	if (!X509_set_version(x509, 0L))
-		return -1;
+		goto err;
 
 	/* common name */
 	name = X509_NAME_new();
 	if (!name)
-		return -1;
+		goto err;
 
 	if (!X509_NAME_add_entry_by_NID(name, NID_commonName, MBSTRING_UTF8,
 				(unsigned char *) "mediaproxy-ng", -1, -1, 0))
-		return -1;
+		goto err;
 
 	if (!X509_set_subject_name(x509, name))
-		return -1;
+		goto err;
 
 	if (!X509_set_issuer_name(x509, name))
-		return -1;
+		goto err;
 
-	/* cert lifetime XXX */
+	/* cert lifetime */
 
 	if (!X509_gmtime_adj(X509_get_notBefore(x509), -60*60*24))
-		return -1;
+		goto err;
 
-	if (!X509_gmtime_adj(X509_get_notAfter(x509), 60*60*24*30))
-		return -1;
+	if (!X509_gmtime_adj(X509_get_notAfter(x509), CERT_EXPIRY_TIME))
+		goto err;
 
 	/* sign it */
 
 	if (!X509_sign(x509, pkey, EVP_sha1()))
-		return -1;
+		goto err;
 
 	/* digest */
 
-	__dtls_cert.fingerprint.hash_func = &hash_funcs[0];
-	dtls_fingerprint_hash(&__dtls_cert.fingerprint, x509);
 
-	__dtls_cert.x509 = x509;
-	__dtls_cert.pkey = pkey;
+	new_cert = obj_alloc0("dtls_cert", sizeof(*new_cert), cert_free);
+	new_cert->fingerprint.hash_func = &hash_funcs[0];
+	dtls_fingerprint_hash(&new_cert->fingerprint, x509);
+
+	new_cert->x509 = x509;
+	new_cert->pkey = pkey;
+	new_cert->expires = time(NULL) + CERT_EXPIRY_TIME;
+
+	/* swap out certs */
+
+	rwlock_lock_w(&__dtls_cert_lock);
+
+	if (__dtls_cert)
+		obj_put(__dtls_cert);
+	__dtls_cert = new_cert;
+
+	rwlock_unlock_w(&__dtls_cert_lock);
 
 	/* cleanup */
 
@@ -200,12 +232,29 @@ static int cert_init() {
 	X509_NAME_free(name);
 
 	return 0;
+
+err:
+	mylog(LOG_ERROR, "Failed to generate DTLS certificate");
+
+	if (pkey)
+		EVP_PKEY_free(pkey);
+	if (exponent)
+		BN_free(exponent);
+	if (rsa)
+		RSA_free(rsa);
+	if (x509)
+		X509_free(x509);
+	if (serial_number)
+		BN_free(serial_number);
+
+	return -1;
 }
 
 int dtls_init() {
 	int i;
 	char *p;
 
+	rwlock_init(&__dtls_cert_lock);
 	if (cert_init())
 		return -1;
 
@@ -223,6 +272,25 @@ int dtls_init() {
 	p[-1] = '\0';
 
 	return 0;
+}
+
+static void __dtls_timer(void *p) {
+	struct dtls_cert *c;
+	long int left;
+
+	c = dtls_cert();
+	left = c->expires - poller_now;
+	if (left > CERT_EXPIRY_TIME/2)
+		goto out;
+
+	cert_init();
+
+out:
+	obj_put(c);
+}
+
+void dtls_timer(struct poller *p) {
+	poller_add_timer(p, __dtls_timer, NULL);
 }
 
 static unsigned int generic_func(unsigned char *o, X509 *x, const EVP_MD *md) {
@@ -260,7 +328,13 @@ static unsigned int sha_512_func(unsigned char *o, X509 *x) {
 
 
 struct dtls_cert *dtls_cert() {
-	return &__dtls_cert;
+	struct dtls_cert *ret;
+
+	rwlock_lock_r(&__dtls_cert_lock);
+	ret = obj_get(__dtls_cert);
+	rwlock_unlock_r(&__dtls_cert_lock);
+
+	return ret;
 }
 
 static int verify_callback(int ok, X509_STORE_CTX *store) {
@@ -565,4 +639,16 @@ int dtls(struct packet_stream *ps, const str *s, struct sockaddr_in6 *fsin) {
 	sendmsg(ps->sfd->fd.fd, &mh, 0);
 
 	return 0;
+}
+
+void dtls_connection_cleanup(struct dtls_connection *c) {
+	if (c->ssl_ctx)
+		SSL_CTX_free(c->ssl_ctx);
+	if (c->ssl)
+		SSL_free(c->ssl);
+	if (c->r_bio)
+		BIO_free(c->r_bio);
+	if (c->w_bio)
+		BIO_free(c->w_bio);
+	ZERO(*c);
 }
