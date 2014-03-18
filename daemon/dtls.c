@@ -123,19 +123,18 @@ static int cert_init() {
 
 	mylog(LOG_INFO, "Generating new DTLS certificate");
 
-	/* key */
+	/* objects */
 
 	pkey = EVP_PKEY_new();
-	if (!pkey)
-		goto err;
-
 	exponent = BN_new();
-	if (!exponent)
+	rsa = RSA_new();
+	serial_number = BN_new();
+	name = X509_NAME_new();
+	x509 = X509_new();
+	if (!exponent || !pkey || !rsa || !serial_number || !name || !x509)
 		goto err;
 
-	rsa = RSA_new();
-	if (!rsa)
-		goto err;
+	/* key */
 
 	if (!BN_set_word(exponent, 0x10001))
 		goto err;
@@ -148,18 +147,10 @@ static int cert_init() {
 
 	/* x509 cert */
 
-	x509 = X509_new();
-	if (!x509)
-		goto err;
-
 	if (!X509_set_pubkey(x509, pkey))
 		goto err;
 
 	/* serial */
-
-	serial_number = BN_new();
-	if (!serial_number)
-		goto err;
 
 	if (!BN_pseudo_rand(serial_number, 64, 0, 0))
 		goto err;
@@ -177,9 +168,6 @@ static int cert_init() {
 		goto err;
 
 	/* common name */
-	name = X509_NAME_new();
-	if (!name)
-		goto err;
 
 	if (!X509_NAME_add_entry_by_NID(name, NID_commonName, MBSTRING_UTF8,
 				(unsigned char *) "mediaproxy-ng", -1, -1, 0))
@@ -205,7 +193,6 @@ static int cert_init() {
 		goto err;
 
 	/* digest */
-
 
 	new_cert = obj_alloc0("dtls_cert", sizeof(*new_cert), cert_free);
 	new_cert->fingerprint.hash_func = &hash_funcs[0];
