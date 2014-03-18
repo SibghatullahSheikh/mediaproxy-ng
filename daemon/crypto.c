@@ -16,7 +16,7 @@
 
 
 
-#define CRYPTO_DEBUG 1
+#define CRYPTO_DEBUG 0
 
 
 
