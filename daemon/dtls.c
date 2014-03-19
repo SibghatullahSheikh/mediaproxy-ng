@@ -569,6 +569,9 @@ int dtls(struct packet_stream *ps, const str *s, struct sockaddr_in6 *fsin) {
 	if (d->connected)
 		return 0;
 
+	if (!d->init || !d->ssl)
+		return -1;
+
 	if (s)
 		BIO_write(d->r_bio, s->s, s->len);
 
