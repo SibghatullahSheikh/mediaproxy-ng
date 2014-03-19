@@ -776,7 +776,7 @@ static void call_timer_iterator(void *key, void *val, void *ptr) {
 		mutex_lock(&ps->in_lock);
 
 		sfd = ps->sfd;
-		if (!sfd || ps->media)
+		if (!sfd || !ps->media)
 			goto next;
 
 		if (ps->media->dtls && sfd->dtls.init && !sfd->dtls.connected)
