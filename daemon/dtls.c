@@ -633,9 +633,11 @@ void dtls_connection_cleanup(struct dtls_connection *c) {
 		SSL_CTX_free(c->ssl_ctx);
 	if (c->ssl)
 		SSL_free(c->ssl);
-	if (c->r_bio)
-		BIO_free(c->r_bio);
-	if (c->w_bio)
-		BIO_free(c->w_bio);
+	if (!c->init) {
+		if (c->r_bio)
+			BIO_free(c->r_bio);
+		if (c->w_bio)
+			BIO_free(c->w_bio);
+	}
 	ZERO(*c);
 }
