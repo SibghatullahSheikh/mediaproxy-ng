@@ -1411,9 +1411,7 @@ static void __init_stream(struct packet_stream *ps) {
 	if (ps->sfd) {
 		crypto_init(&ps->sfd->crypto, &media->sdes_in.params);
 
-		if (media->dtls && !ps->fallback_rtcp
-				&& media->fingerprint.hash_func)
-		{
+		if (media->dtls && !ps->fallback_rtcp) {
 			active = (ps->filled && media->setup_active);
 			dtls_connection_init(ps, active, call->dtls_cert);
 		}
@@ -1526,7 +1524,7 @@ static void __generate_crypto(const struct sdp_ng_flags *flags, struct call_medi
 			this->setup_passive = 0;
 
 		/* if we're answering and doing DTLS, then skip the SDES stuff */
-		if (this->fingerprint.hash_func && this->dtls) {
+		if (this->dtls) {
 			this->sdes_in.params.crypto_suite = NULL;
 			this->sdes_out.params.crypto_suite = NULL;
 			goto skip_sdes;
