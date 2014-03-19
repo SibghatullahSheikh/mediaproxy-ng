@@ -776,10 +776,10 @@ static void call_timer_iterator(void *key, void *val, void *ptr) {
 		mutex_lock(&ps->in_lock);
 
 		sfd = ps->sfd;
-		if (!sfd)
+		if (!sfd || ps->media)
 			goto next;
 
-		if (sfd->dtls.init && !sfd->dtls.connected)
+		if (ps->media->dtls && sfd->dtls.init && !sfd->dtls.connected)
 			dtls(ps, NULL, NULL);
 
 		if (hlp->ports[sfd->fd.localport])
