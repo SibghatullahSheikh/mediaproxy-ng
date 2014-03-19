@@ -578,6 +578,10 @@ int dtls(struct packet_stream *ps, const str *s, struct sockaddr_in6 *fsin) {
 		/* connected! */
 		if (dtls_setup_crypto(ps, d))
 			/* XXX ?? */ ;
+		if (ps->rtp && ps->rtcp && ps->rtcp_sibling && ps->media->rtcp_mux) {
+			if (dtls_setup_crypto(ps->rtcp_sibling, d))
+				/* XXX ?? */ ;
+		}
 	}
 
 	ret = BIO_ctrl_pending(d->w_bio);
