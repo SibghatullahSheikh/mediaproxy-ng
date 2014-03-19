@@ -303,7 +303,7 @@ void kernelize(struct packet_stream *stream) {
 	mpt.src_addr.port = sink->sfd->fd.localport;
 	mpt.dst_addr.port = sink->endpoint.port;
 	mpt.rtcp_mux = stream->media->rtcp_mux;
-	mpt.dtls = stream->sfd->dtls.init;
+	mpt.dtls = stream->media->dtls;
 
 	if (IN6_IS_ADDR_V4MAPPED(&sink->endpoint.ip46)) {
 		mpt.src_addr.family = AF_INET;
@@ -497,7 +497,7 @@ static int stream_packet(struct stream_fd *sfd, str *s, struct sockaddr_in6 *fsi
 	if (!stream->sfd)
 		goto done;
 
-	if (stream->sfd->dtls.init && is_dtls(s)) {
+	if (media->dtls && is_dtls(s)) {
 		ret = dtls(stream, s, fsin);
 		if (!ret)
 			goto done;
