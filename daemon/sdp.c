@@ -1671,9 +1671,9 @@ int sdp_replace(struct sdp_chopper *chop, GQueue *sessions, struct call_monologu
 			if (call_media->send && call_media->recv)
 				chopper_append_c(chop, "a=sendrecv\r\n");
 			else if (call_media->send && !call_media->recv)
-				chopper_append_c(chop, "a=recvonly\r\n");
-			else if (!call_media->send && call_media->recv)
 				chopper_append_c(chop, "a=sendonly\r\n");
+			else if (!call_media->send && call_media->recv)
+				chopper_append_c(chop, "a=recvonly\r\n");
 			else
 				chopper_append_c(chop, "a=inactive\r\n");
 
