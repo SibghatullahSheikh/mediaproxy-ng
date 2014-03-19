@@ -1689,8 +1689,11 @@ int monologue_offer_answer(struct call_monologue *monologue, GQueue *streams,
 
 		other_media->setup_passive = sp->setup_active;
 		other_media->setup_active = sp->setup_passive;
-
 		other_media->fingerprint = sp->fingerprint;
+		other_media->dtls = 0;
+		if ((other_media->setup_passive || other_media->setup_active)
+				&& other_media->fingerprint.hash_func)
+			other_media->dtls = 1;
 
 		/* control rtcp-mux */
 		__rtcp_mux_logic(flags, media, other_media);
