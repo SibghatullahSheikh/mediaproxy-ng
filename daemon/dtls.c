@@ -405,11 +405,13 @@ int dtls_connection_init(struct packet_stream *ps, int active, struct dtls_cert 
 	struct dtls_connection *d = &ps->sfd->dtls;
 	unsigned long err;
 
-	if (d->init)
-		goto connect;
 	__DBG("dtls_connection_init(%i)", active);
 
-	ZERO(*d);
+	if (d->init) {
+		if (d->active == active)
+			goto connect;
+		dtls_connection_cleanup(d);
+	}
 
 	d->ssl_ctx = SSL_CTX_new(active ? DTLSv1_client_method() : DTLSv1_server_method());
 	if (!d->ssl_ctx)
