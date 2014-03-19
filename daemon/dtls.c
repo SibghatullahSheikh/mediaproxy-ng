@@ -371,6 +371,8 @@ static int try_connect(struct dtls_connection *d) {
 	if (d->connected)
 		return 0;
 
+	__DBG("try_connect(%i)", d->active);
+
 	if (d->active)
 		ret = SSL_connect(d->ssl);
 	else
@@ -405,6 +407,7 @@ int dtls_connection_init(struct packet_stream *ps, int active, struct dtls_cert 
 
 	if (d->init)
 		goto connect;
+	__DBG("dtls_connection_init(%i)", active);
 
 	ZERO(*d);
 
@@ -633,6 +636,8 @@ int dtls(struct packet_stream *ps, const str *s, struct sockaddr_in6 *fsin) {
 }
 
 void dtls_connection_cleanup(struct dtls_connection *c) {
+	__DBG("dtls_connection_cleanup");
+
 	if (c->ssl_ctx)
 		SSL_CTX_free(c->ssl_ctx);
 	if (c->ssl)
