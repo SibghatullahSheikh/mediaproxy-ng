@@ -9,6 +9,14 @@
 
 
 
+#define SRTP_MAX_MASTER_KEY_LEN 16
+#define SRTP_MAX_MASTER_SALT_LEN 14
+#define SRTP_MAX_SESSION_KEY_LEN 16
+#define SRTP_MAX_SESSION_SALT_LEN 14
+#define SRTP_MAX_SESSION_AUTH_LEN 20
+
+
+
 struct crypto_context;
 struct rtp_header;
 struct rtcp_packet;
@@ -22,6 +30,7 @@ typedef int (*session_key_cleanup_func)(struct crypto_context *);
 
 struct crypto_suite {
 	const char *name;
+	const char *dtls_name;
 	unsigned int
 		master_key_len,
 		master_salt_len,
@@ -50,8 +59,8 @@ struct crypto_suite {
 struct crypto_params {
 	const struct crypto_suite *crypto_suite;
 	/* we only support one master key for now */
-	char master_key[16];
-	char master_salt[14];
+	unsigned char master_key[SRTP_MAX_MASTER_KEY_LEN];
+	unsigned char master_salt[SRTP_MAX_MASTER_SALT_LEN];
 	unsigned char *mki;
 	unsigned int mki_len;
 };
@@ -59,9 +68,9 @@ struct crypto_params {
 struct crypto_context {
 	struct crypto_params params;
 
-	char session_key[16]; /* k_e */
-	char session_salt[14]; /* k_s */
-	char session_auth_key[20];
+	char session_key[SRTP_MAX_SESSION_KEY_LEN]; /* k_e */
+	char session_salt[SRTP_MAX_SESSION_SALT_LEN]; /* k_s */
+	char session_auth_key[SRTP_MAX_SESSION_AUTH_LEN];
 
 	u_int64_t last_index;
 	/* XXX replay list */

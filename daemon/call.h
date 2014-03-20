@@ -29,14 +29,13 @@ enum call_opmode {
 	OP_OTHER,
 };
 
-enum transport_protocol {
-	PROTO_UNKNOWN = 0,
-	PROTO_RTP_AVP,
+enum transport_protocol_index {
+	PROTO_RTP_AVP = 0,
 	PROTO_RTP_SAVP,
 	PROTO_RTP_AVPF,
 	PROTO_RTP_SAVPF,
-
-	__PROTO_LAST
+	PROTO_UDP_TLS_RTP_SAVP,
+	PROTO_UDP_TLS_RTP_SAVPF,
 };
 
 struct call_monologue;
@@ -92,7 +91,16 @@ typedef bencode_buffer_t call_buffer_t;
 
 
 
-extern const char *transport_protocol_strings[__PROTO_LAST];
+struct transport_protocol {
+	enum transport_protocol_index	index;
+	const char			*name;
+	int				srtp:1;
+	int				avpf:1;
+};
+extern const struct transport_protocol transport_protocols[];
+
+
+
 
 struct stats {
 	u_int64_t			packets;
@@ -114,7 +122,7 @@ struct stream_params {
 	struct endpoint		rtp_endpoint;
 	struct endpoint		rtcp_endpoint;
 	unsigned int		consecutive_ports;
-	enum transport_protocol	protocol;
+	const struct transport_protocol *protocol;
 	struct crypto_params	crypto;
 	unsigned int		sdes_tag;
 	enum stream_direction	direction[2];
@@ -137,6 +145,7 @@ struct stream_fd {
 	struct call		*call;		/* RO */
 	struct packet_stream	*stream;	/* LOCK: call->master_lock */
 	struct crypto_context	crypto;		/* IN direction, LOCK: stream->in_lock */
+	struct dtls_connection	dtls;		/* LOCK: stream->in_lock */
 };
 
 struct endpoint_map {
@@ -170,8 +179,10 @@ struct packet_stream {
 
 	/* in_lock must be held for SETTING these: */
 	/* (XXX replace with atomic ops where appropriate) */
+	int			rtp:1;
 	int			rtcp:1;	
 	int			implicit_rtcp:1;
+	int			fallback_rtcp:1;
 	int			stun:1;	
 	int			filled:1;
 	int			confirmed:1;
@@ -187,7 +198,7 @@ struct call_media {
 
 	unsigned int		index;		/* RO */
 	str			type;		/* RO */
-	enum transport_protocol	protocol;
+	const struct transport_protocol *protocol;
 	int			desired_family;
 
 	str			ice_ufrag;
@@ -197,7 +208,8 @@ struct call_media {
 		unsigned int		tag;
 	}			sdes_in,
 				sdes_out;
-	struct dtls_fingerprint fingerprint;
+
+	struct dtls_fingerprint fingerprint; /* as received */
 
 	GQueue			streams; /* normally RTP + RTCP */
 	GSList			*endpoint_maps;
@@ -206,6 +218,7 @@ struct call_media {
 	int			send:1;
 	int			recv:1;
 	int			rtcp_mux:1;
+	int			dtls:1;
 	int			setup_active:1;
 	int			setup_passive:1;
 	int			rtcp_mux_override:1;
@@ -239,6 +252,7 @@ struct call {
 	//GHashTable		*branches;
 	GSList			*streams;
 	GSList			*stream_fds;
+	struct dtls_cert	*dtls_cert; /* for outgoing */
 
 	str			callid;	
 	char			redis_uuid[37];
@@ -329,7 +343,7 @@ void kernelize(struct packet_stream *);
 int call_stream_address_alt(char *, struct packet_stream *, enum stream_address_format, int *);
 int call_stream_address(char *, struct packet_stream *, enum stream_address_format, int *);
 
-enum transport_protocol transport_protocol(const str *s);
+const struct transport_protocol *transport_protocol(const str *s);
 
 
 

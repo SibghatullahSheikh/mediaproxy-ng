@@ -13,7 +13,7 @@ struct sdp_ng_flags {
 	str media_address;
 	str transport_protocol_str;
 	str address_family_str;
-	enum transport_protocol transport_protocol;
+	const struct transport_protocol *transport_protocol;
 	struct in6_addr parsed_received_from;
 	struct in6_addr parsed_media_address;
 	enum stream_direction directions[2];

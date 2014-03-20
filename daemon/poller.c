@@ -443,19 +443,20 @@ out:
 
 static void timer_item_free(void *p) {
 	struct timer_item *i = p;
-	obj_put_o(i->obj_ptr);
+	if (i->obj_ptr)
+		obj_put_o(i->obj_ptr);
 }
 
 static int poller_timer_link(struct poller *p, GSList **lp, void (*f)(void *), struct obj *o) {
 	struct timer_item *i;
 
-	if (!o || !f)
+	if (!f)
 		return -1;
 
 	i = obj_alloc0("timer_item", sizeof(*i), timer_item_free);
 
 	i->func = f;
-	i->obj_ptr = obj_hold_o(o);
+	i->obj_ptr = o ? obj_hold_o(o) : NULL;
 
 	mutex_lock(&p->timers_add_del_lock);
 	*lp = g_slist_prepend(*lp, i);

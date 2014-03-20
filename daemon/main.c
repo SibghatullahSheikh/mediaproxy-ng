@@ -11,6 +11,7 @@
 #include <errno.h>
 #include <stdlib.h>
 #include <time.h>
+#include <openssl/ssl.h>
 
 #include "poller.h"
 #include "control_tcp.h"
@@ -354,6 +355,8 @@ static void init_everything() {
 
 	clock_gettime(CLOCK_REALTIME, &ts);
 	srandom(ts.tv_sec ^ ts.tv_nsec);
+	SSL_library_init();
+	SSL_load_error_strings();
 
 #if !GLIB_CHECK_VERSION(2,32,0)
 	g_thread_init(NULL);
@@ -438,6 +441,8 @@ void create_everything(struct main_context *ctx) {
 	ctx->m = callmaster_new(ctx->p);
 	if (!ctx->m)
 		die("callmaster creation failed\n");
+
+	dtls_timer(ctx->p);
 
 	ZERO(mc);
 	mc.kernelfd = kfd;

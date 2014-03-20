@@ -36,6 +36,7 @@ static int null_crypt_rtcp(struct crypto_context *c, struct rtcp_packet *r, str 
 const struct crypto_suite crypto_suites[] = {
 	{
 		.name			= "AES_CM_128_HMAC_SHA1_80",
+		.dtls_name		= "SRTP_AES128_CM_SHA1_80",
 		.master_key_len		= 16,
 		.master_salt_len	= 14,
 		.session_key_len	= 16,
@@ -56,10 +57,10 @@ const struct crypto_suite crypto_suites[] = {
 		.hash_rtcp		= hmac_sha1_rtcp,
 		.session_key_init	= aes_cm_session_key_init,
 		.session_key_cleanup	= evp_session_key_cleanup,
-		.dtls_profile_code	= "\x00\x01",
 	},
 	{
 		.name			= "AES_CM_128_HMAC_SHA1_32",
+		.dtls_name		= "SRTP_AES128_CM_SHA1_32",
 		.master_key_len		= 16,
 		.master_salt_len	= 14,
 		.session_key_len	= 16,
@@ -80,10 +81,10 @@ const struct crypto_suite crypto_suites[] = {
 		.hash_rtcp		= hmac_sha1_rtcp,
 		.session_key_init	= aes_cm_session_key_init,
 		.session_key_cleanup	= evp_session_key_cleanup,
-		.dtls_profile_code	= "\x00\x02",
 	},
 	{
 		.name			= "F8_128_HMAC_SHA1_80",
+//		.dtls_name		= "SRTP_AES128_F8_SHA1_80",
 		.master_key_len		= 16,
 		.master_salt_len	= 14,
 		.session_key_len	= 16,
@@ -106,7 +107,32 @@ const struct crypto_suite crypto_suites[] = {
 		.session_key_cleanup	= evp_session_key_cleanup,
 	},
 	{
+		.name			= "F8_128_HMAC_SHA1_32",
+//		.dtls_name		= "SRTP_AES128_F8_SHA1_32",
+		.master_key_len		= 16,
+		.master_salt_len	= 14,
+		.session_key_len	= 16,
+		.session_salt_len	= 14,
+		.srtp_lifetime		= 1ULL << 48,
+		.srtcp_lifetime		= 1ULL << 31,
+		.kernel_cipher		= MPC_AES_F8,
+		.kernel_hmac		= MPH_HMAC_SHA1,
+		.srtp_auth_tag		= 4,
+		.srtcp_auth_tag		= 10,
+		.srtp_auth_key_len	= 20,
+		.srtcp_auth_key_len	= 20,
+		.encrypt_rtp		= aes_f8_encrypt_rtp,
+		.decrypt_rtp		= aes_f8_encrypt_rtp,
+		.encrypt_rtcp		= aes_f8_encrypt_rtcp,
+		.decrypt_rtcp		= aes_f8_encrypt_rtcp,
+		.hash_rtp		= hmac_sha1_rtp,
+		.hash_rtcp		= hmac_sha1_rtcp,
+		.session_key_init	= aes_f8_session_key_init,
+		.session_key_cleanup	= evp_session_key_cleanup,
+	},
+	{
 		.name			= "NULL_HMAC_SHA1_80",
+//		.dtls_name		= "SRTP_NULL_SHA1_80",
 		.master_key_len		= 16,
 		.master_salt_len	= 14,
 		.session_key_len	= 0,
@@ -126,10 +152,10 @@ const struct crypto_suite crypto_suites[] = {
 		.hash_rtp		= hmac_sha1_rtp,
 		.hash_rtcp		= hmac_sha1_rtcp,
 		.session_key_cleanup	= evp_session_key_cleanup,
-		.dtls_profile_code	= "\x00\x05",
 	},
 	{
 		.name			= "NULL_HMAC_SHA1_32",
+//		.dtls_name		= "SRTP_NULL_SHA1_32",
 		.master_key_len		= 16,
 		.master_salt_len	= 14,
 		.session_key_len	= 0,
@@ -149,7 +175,6 @@ const struct crypto_suite crypto_suites[] = {
 		.hash_rtp		= hmac_sha1_rtp,
 		.hash_rtcp		= hmac_sha1_rtcp,
 		.session_key_cleanup	= evp_session_key_cleanup,
-		.dtls_profile_code	= "\x00\x06",
 	},
 };
 
@@ -184,7 +209,7 @@ const struct crypto_suite *crypto_find_suite(const str *s) {
 
 /* rfc 3711 section 4.1 and 4.1.1
  * "in" and "out" MAY point to the same buffer */
-static void aes_ctr_128(char *out, str *in, EVP_CIPHER_CTX *ecc, const char *iv) {
+static void aes_ctr_128(unsigned char *out, str *in, EVP_CIPHER_CTX *ecc, const unsigned char *iv) {
 	unsigned char ivx[16];
 	unsigned char key_block[16];
 	unsigned char *p, *q;
@@ -232,13 +257,13 @@ done:
 	;
 }
 
-static void aes_ctr_128_no_ctx(char *out, str *in, const char *key, const char *iv) {
+static void aes_ctr_128_no_ctx(unsigned char *out, str *in, const unsigned char *key, const unsigned char *iv) {
 	EVP_CIPHER_CTX ctx;
 	unsigned char block[16];
 	int len;
 
 	EVP_CIPHER_CTX_init(&ctx);
-	EVP_EncryptInit_ex(&ctx, EVP_aes_128_ecb(), NULL, (const unsigned char *) key, NULL);
+	EVP_EncryptInit_ex(&ctx, EVP_aes_128_ecb(), NULL, key, NULL);
 	aes_ctr_128(out, in, &ctx, iv);
 	EVP_EncryptFinal_ex(&ctx, block, &len);
 	EVP_CIPHER_CTX_cleanup(&ctx);
@@ -249,10 +274,10 @@ static void aes_ctr_128_no_ctx(char *out, str *in, const char *key, const char *
  * x: 112 bits
  * n <= 256
  * out->len := n / 8 */
-static void prf_n(str *out, const char *key, const char *x) {
-	char iv[16];
-	char o[32];
-	char in[32];
+static void prf_n(str *out, const unsigned char *key, const unsigned char *x) {
+	unsigned char iv[16];
+	unsigned char o[32];
+	unsigned char in[32];
 	str in_s;
 
 	assert(sizeof(o) >= out->len);
@@ -261,7 +286,7 @@ static void prf_n(str *out, const char *key, const char *x) {
 	memcpy(iv, x, 14);
 	/* iv[14] = iv[15] = 0;   := x << 16 */
 	ZERO(in); /* outputs the key stream */
-	str_init_len(&in_s, in, out->len > 16 ? 32 : 16);
+	str_init_len(&in_s, (void *) in, out->len > 16 ? 32 : 16);
 	aes_ctr_128_no_ctx(o, &in_s, key, iv);
 
 	memcpy(out->s, o, out->len);
@@ -284,7 +309,7 @@ int crypto_gen_session_key(struct crypto_context *c, str *out, unsigned char lab
 	for (i = 13 - index_len; i < 14; i++)
 		x[i] = key_id[i - (13 - index_len)] ^ x[i];
 
-	prf_n(out, c->params.master_key, (char *) x);
+	prf_n(out, c->params.master_key, x);
 
 #if CRYPTO_DEBUG
 	mylog(LOG_DEBUG, "Generated session key: master key "
@@ -293,14 +318,14 @@ int crypto_gen_session_key(struct crypto_context *c, str *out, unsigned char lab
 			"%02x%02x%02x%02x..., "
 			"label %02x, length %i, result "
 			"%02x%02x%02x%02x...",
-			(unsigned char) c->master_key[0],
-			(unsigned char) c->master_key[1],
-			(unsigned char) c->master_key[2],
-			(unsigned char) c->master_key[3],
-			(unsigned char) c->master_salt[0],
-			(unsigned char) c->master_salt[1],
-			(unsigned char) c->master_salt[2],
-			(unsigned char) c->master_salt[3],
+			c->params.master_key[0],
+			c->params.master_key[1],
+			c->params.master_key[2],
+			c->params.master_key[3],
+			c->params.master_salt[0],
+			c->params.master_salt[1],
+			c->params.master_salt[2],
+			c->params.master_salt[3],
 			label, out->len,
 			(unsigned char) out->s[0],
 			(unsigned char) out->s[1],
@@ -328,7 +353,7 @@ static int aes_cm_encrypt(struct crypto_context *c, u_int32_t ssrc, str *s, u_in
 	ivi[2] ^= idxh;
 	ivi[3] ^= idxl;
 
-	aes_ctr_128(s->s, s, c->session_key_ctx[0], (char *) iv);
+	aes_ctr_128((void *) s->s, s, c->session_key_ctx[0], iv);
 
 	return 0;
 }

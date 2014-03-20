@@ -98,7 +98,7 @@ struct attribute_crypto {
 	const struct crypto_suite *crypto_suite;
 	str master_key;
 	str salt;
-	char key_salt_buf[30];
+	char key_salt_buf[SRTP_MAX_MASTER_KEY_LEN + SRTP_MAX_MASTER_SALT_LEN];
 	u_int64_t lifetime;
 	unsigned char mki[256];
 	unsigned int mki_len;
@@ -125,7 +125,7 @@ struct attribute_fingerprint {
 	str fingerprint_str;
 
 	const struct dtls_hash_func *hash_func;
-	unsigned char fingerprint[64];
+	unsigned char fingerprint[DTLS_MAX_DIGEST_LEN];
 };
 
 struct attribute_setup {
@@ -434,7 +434,6 @@ static int parse_attribute_crypto(struct sdp_attribute *output) {
 		goto error;
 	salt_key_len = c->crypto_suite->master_key_len
 			+ c->crypto_suite->master_salt_len;
-	assert(sizeof(c->key_salt_buf) >= salt_key_len);
 	enc_salt_key_len = ceil((double) salt_key_len * 4.0/3.0);
 
 	err = "invalid key parameter length";
@@ -595,22 +594,27 @@ static int parse_attribute_fingerprint(struct sdp_attribute *output) {
 		else
 			return -1;
 
+		output->u.fingerprint.fingerprint[i] <<= 4;
+
 		if (c[1] >= '0' && c[1] <= '9')
-			output->u.fingerprint.fingerprint[i] = c[1] - '0';
+			output->u.fingerprint.fingerprint[i] |= c[1] - '0';
 		else if (c[1] >= 'a' && c[1] <= 'f')
-			output->u.fingerprint.fingerprint[i] = c[1] - 'a' + 10;
+			output->u.fingerprint.fingerprint[i] |= c[1] - 'a' + 10;
 		else if (c[1] >= 'A' && c[1] <= 'F')
-			output->u.fingerprint.fingerprint[i] = c[1] - 'A' + 10;
+			output->u.fingerprint.fingerprint[i] |= c[1] - 'A' + 10;
 		else
 			return -1;
 
 		if (c[2] != ':')
-			break;
+			goto done;
 
 		c += 3;
 	}
 
-	if (i != output->u.fingerprint.hash_func->num_bytes)
+	return -1;
+
+done:
+	if (++i != output->u.fingerprint.hash_func->num_bytes)
 		return -1;
 
 	return 0;
@@ -1095,7 +1099,7 @@ static void chopper_append_dup(struct sdp_chopper *c, const char *s, int len) {
 static void chopper_append_printf(struct sdp_chopper *c, const char *fmt, ...) __attribute__((format(printf,2,3)));
 
 static void chopper_append_printf(struct sdp_chopper *c, const char *fmt, ...) {
-	char buf[32];
+	char buf[512];
 	int l;
 	va_list va;
 
@@ -1154,14 +1158,13 @@ static int replace_transport_protocol(struct sdp_chopper *chop,
 		struct sdp_media *media, struct call_media *cm)
 {
 	str *tp = &media->transport;
-	const char *new_tp = transport_protocol_strings[cm->protocol];
 
-	if (!new_tp)
+	if (!cm->protocol)
 		return 0; /* XXX correct? or give warning? */
 
 	if (copy_up_to(chop, tp))
 		return -1;
-	chopper_append_c(chop, new_tp);
+	chopper_append_c(chop, cm->protocol->name);
 	if (skip_over(chop, tp))
 		return -1;
 
@@ -1313,6 +1316,8 @@ static int process_session_attributes(struct sdp_chopper *chop, struct sdp_attri
 			case ATTR_SENDONLY:
 			case ATTR_RECVONLY:
 			case ATTR_SENDRECV:
+			case ATTR_FINGERPRINT:
+			case ATTR_SETUP:
 				goto strip;
 
 			case ATTR_GROUP:
@@ -1362,6 +1367,8 @@ static int process_media_attributes(struct sdp_chopper *chop, struct sdp_media *
 			case ATTR_SENDONLY:
 			case ATTR_RECVONLY:
 			case ATTR_SENDRECV:
+			case ATTR_FINGERPRINT:
+			case ATTR_SETUP:
 				goto strip;
 
 			case ATTR_MID:
@@ -1482,8 +1489,49 @@ static int has_ice(GQueue *sessions) {
 	return 0;
 }
 
+static void insert_dtls(struct call_media *media, struct sdp_chopper *chop) {
+	char hexbuf[DTLS_MAX_DIGEST_LEN * 3 + 2];
+	unsigned char *p;
+	char *o;
+	int i;
+	const struct dtls_hash_func *hf;
+	const char *actpass;
+	struct call *call = media->call;
+
+	if (!call->dtls_cert || !media->dtls)
+		return;
+
+	hf = call->dtls_cert->fingerprint.hash_func;
+
+	assert(hf->num_bytes > 0);
+
+	p = call->dtls_cert->fingerprint.digest;
+	o = hexbuf;
+	for (i = 0; i < hf->num_bytes; i++)
+		o += sprintf(o, "%02X:", *p++);
+	*(--o) = '\0';
+
+	actpass = "holdconn";
+	if (media->setup_passive) {
+		if (media->setup_active)
+			actpass = "actpass";
+		else
+			actpass = "passive";
+	}
+	else if (media->setup_active)
+		actpass = "active";
+
+	chopper_append_c(chop, "a=setup:");
+	chopper_append_c(chop, actpass);
+	chopper_append_c(chop, "\r\na=fingerprint:");
+	chopper_append_c(chop, hf->name);
+	chopper_append_c(chop, " ");
+	chopper_append_dup(chop, hexbuf, o - hexbuf);
+	chopper_append_c(chop, "\r\n");
+}
+
 static void insert_crypto(struct call_media *media, struct sdp_chopper *chop) {
-	char b64_buf[64];
+	char b64_buf[((SRTP_MAX_MASTER_KEY_LEN + SRTP_MAX_MASTER_SALT_LEN) / 3 + 1) * 4 + 4];
 	char *p;
 	int state = 0, save = 0, i;
 	struct crypto_params *cp = &media->sdes_out.params;
@@ -1500,9 +1548,6 @@ static void insert_crypto(struct call_media *media, struct sdp_chopper *chop) {
 			cp->crypto_suite->master_salt_len, 0,
 			p, &state, &save);
 	p += g_base64_encode_close(0, p, &state, &save);
-
-	assert(sizeof(b64_buf) >= (((cp->crypto_suite->master_key_len
-				+ cp->crypto_suite->master_salt_len)) / 3 + 1) * 4 + 4);
 
 	chopper_append_c(chop, "a=crypto:");
 	chopper_append_printf(chop, "%u ", media->sdes_out.tag);
@@ -1626,9 +1671,9 @@ int sdp_replace(struct sdp_chopper *chop, GQueue *sessions, struct call_monologu
 			if (call_media->send && call_media->recv)
 				chopper_append_c(chop, "a=sendrecv\r\n");
 			else if (call_media->send && !call_media->recv)
-				chopper_append_c(chop, "a=recvonly\r\n");
-			else if (!call_media->send && call_media->recv)
 				chopper_append_c(chop, "a=sendonly\r\n");
+			else if (!call_media->send && call_media->recv)
+				chopper_append_c(chop, "a=recvonly\r\n");
 			else
 				chopper_append_c(chop, "a=inactive\r\n");
 
@@ -1648,6 +1693,7 @@ int sdp_replace(struct sdp_chopper *chop, GQueue *sessions, struct call_monologu
 			}
 
 			insert_crypto(call_media, chop);
+			insert_dtls(call_media, chop);
 
 			if (do_ice) {
 				if (!call_media->ice_ufrag.s) {

@@ -2083,6 +2083,14 @@ static inline int is_muxed_rtcp(struct rtp_parsed *r) {
 	return 1;
 }
 
+static inline int is_dtls(struct rtp_parsed *r) {
+	if (r->header->m_pt < 20)
+		return 0;
+	if (r->header->m_pt > 63)
+		return 0;
+	return 1;
+}
+
 static unsigned int mediaproxy46(struct sk_buff *skb, struct mediaproxy_table *t) {
 	struct udphdr *uh;
 	struct mediaproxy_target *g;
@@ -2133,6 +2141,8 @@ not_stun:
 	if (parse_rtp(&rtp, skb))
 		goto skip1;
 	if (g->target.rtcp_mux && is_muxed_rtcp(&rtp))
+		goto skip1;
+	if (g->target.dtls && is_dtls(&rtp))
 		goto skip1;
 	pkt_idx = packet_index(&g->decrypt, &g->target.decrypt, rtp.header);
 	if (srtp_auth_validate(&g->decrypt, &g->target.decrypt, &rtp, pkt_idx))

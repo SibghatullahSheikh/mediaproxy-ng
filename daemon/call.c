@@ -58,12 +58,45 @@ struct streamhandler {
 	const struct streamhandler_io	*out;
 };
 
-const char *transport_protocol_strings[__PROTO_LAST] = {
-	[PROTO_RTP_AVP]		= "RTP/AVP",
-	[PROTO_RTP_SAVP]	= "RTP/SAVP",
-	[PROTO_RTP_AVPF]	= "RTP/AVPF",
-	[PROTO_RTP_SAVPF]	= "RTP/SAVPF",
+const struct transport_protocol transport_protocols[] = {
+	[PROTO_RTP_AVP] = {
+		.index		= PROTO_RTP_AVP,
+		.name		= "RTP/AVP",
+		.srtp		= 0,
+		.avpf		= 0,
+	},
+	[PROTO_RTP_SAVP] = {
+		.index		= PROTO_RTP_SAVP,
+		.name		= "RTP/SAVP",
+		.srtp		= 1,
+		.avpf		= 0,
+	},
+	[PROTO_RTP_AVPF] = {
+		.index		= PROTO_RTP_AVPF,
+		.name		= "RTP/AVPF",
+		.srtp		= 0,
+		.avpf		= 1,
+	},
+	[PROTO_RTP_SAVPF] = {
+		.index		= PROTO_RTP_SAVPF,
+		.name		= "RTP/SAVPF",
+		.srtp		= 1,
+		.avpf		= 1,
+	},
+	[PROTO_UDP_TLS_RTP_SAVP] = {
+		.index		= PROTO_UDP_TLS_RTP_SAVP,
+		.name		= "UDP/TLS/RTP/SAVP",
+		.srtp		= 1,
+		.avpf		= 0,
+	},
+	[PROTO_UDP_TLS_RTP_SAVPF] = {
+		.index		= PROTO_UDP_TLS_RTP_SAVPF,
+		.name		= "UDP/TLS/RTP/SAVPF",
+		.srtp		= 1,
+		.avpf		= 1,
+	},
 };
+const int num_transport_protocols = G_N_ELEMENTS(transport_protocols);
 
 
 
@@ -142,38 +175,48 @@ static const struct streamhandler __sh_savpf2savp = {
 
 /* ********** */
 
-static const struct streamhandler *__sh_matrix_in_rtp_avp[__PROTO_LAST] = {
-	[PROTO_RTP_AVP]		= &__sh_noop,
-	[PROTO_RTP_AVPF]	= &__sh_noop,
-	[PROTO_RTP_SAVP]	= &__sh_avp2savp,
-	[PROTO_RTP_SAVPF]	= &__sh_avp2savp,
+static const struct streamhandler *__sh_matrix_in_rtp_avp[] = {
+	[PROTO_RTP_AVP]			= &__sh_noop,
+	[PROTO_RTP_AVPF]		= &__sh_noop,
+	[PROTO_RTP_SAVP]		= &__sh_avp2savp,
+	[PROTO_RTP_SAVPF]		= &__sh_avp2savp,
+	[PROTO_UDP_TLS_RTP_SAVP]	= &__sh_avp2savp,
+	[PROTO_UDP_TLS_RTP_SAVPF]	= &__sh_avp2savp,
 };
-static const struct streamhandler *__sh_matrix_in_rtp_avpf[__PROTO_LAST] = {
-	[PROTO_RTP_AVP]		= &__sh_avpf2avp,
-	[PROTO_RTP_AVPF]	= &__sh_noop,
-	[PROTO_RTP_SAVP]	= &__sh_avpf2savp,
-	[PROTO_RTP_SAVPF]	= &__sh_avp2savp,
+static const struct streamhandler *__sh_matrix_in_rtp_avpf[] = {
+	[PROTO_RTP_AVP]			= &__sh_avpf2avp,
+	[PROTO_RTP_AVPF]		= &__sh_noop,
+	[PROTO_RTP_SAVP]		= &__sh_avpf2savp,
+	[PROTO_RTP_SAVPF]		= &__sh_avp2savp,
+	[PROTO_UDP_TLS_RTP_SAVP]	= &__sh_avpf2savp,
+	[PROTO_UDP_TLS_RTP_SAVPF]	= &__sh_avp2savp,
 };
-static const struct streamhandler *__sh_matrix_in_rtp_savp[__PROTO_LAST] = {
-	[PROTO_RTP_AVP]		= &__sh_savp2avp,
-	[PROTO_RTP_AVPF]	= &__sh_savp2avp,
-	[PROTO_RTP_SAVP]	= &__sh_noop,
-	[PROTO_RTP_SAVPF]	= &__sh_noop,
+static const struct streamhandler *__sh_matrix_in_rtp_savp[] = {
+	[PROTO_RTP_AVP]			= &__sh_savp2avp,
+	[PROTO_RTP_AVPF]		= &__sh_savp2avp,
+	[PROTO_RTP_SAVP]		= &__sh_noop,
+	[PROTO_RTP_SAVPF]		= &__sh_noop,
+	[PROTO_UDP_TLS_RTP_SAVP]	= &__sh_noop,
+	[PROTO_UDP_TLS_RTP_SAVPF]	= &__sh_noop,
 };
-static const struct streamhandler *__sh_matrix_in_rtp_savpf[__PROTO_LAST] = {
-	[PROTO_RTP_AVP]		= &__sh_savpf2avp,
-	[PROTO_RTP_AVPF]	= &__sh_savp2avp,
-	[PROTO_RTP_SAVP]	= &__sh_savpf2savp,
-	[PROTO_RTP_SAVPF]	= &__sh_noop,
+static const struct streamhandler *__sh_matrix_in_rtp_savpf[] = {
+	[PROTO_RTP_AVP]			= &__sh_savpf2avp,
+	[PROTO_RTP_AVPF]		= &__sh_savp2avp,
+	[PROTO_RTP_SAVP]		= &__sh_savpf2savp,
+	[PROTO_RTP_SAVPF]		= &__sh_noop,
+	[PROTO_UDP_TLS_RTP_SAVP]	= &__sh_savpf2savp,
+	[PROTO_UDP_TLS_RTP_SAVPF]	= &__sh_noop,
 };
 
 /* ********** */
 
-static const struct streamhandler **__sh_matrix[__PROTO_LAST] = {
-	[PROTO_RTP_AVP]		= __sh_matrix_in_rtp_avp,
-	[PROTO_RTP_AVPF]	= __sh_matrix_in_rtp_avpf,
-	[PROTO_RTP_SAVP]	= __sh_matrix_in_rtp_savp,
-	[PROTO_RTP_SAVPF]	= __sh_matrix_in_rtp_savpf,
+static const struct streamhandler **__sh_matrix[] = {
+	[PROTO_RTP_AVP]			= __sh_matrix_in_rtp_avp,
+	[PROTO_RTP_AVPF]		= __sh_matrix_in_rtp_avpf,
+	[PROTO_RTP_SAVP]		= __sh_matrix_in_rtp_savp,
+	[PROTO_RTP_SAVPF]		= __sh_matrix_in_rtp_savpf,
+	[PROTO_UDP_TLS_RTP_SAVP]	= __sh_matrix_in_rtp_savp,
+	[PROTO_UDP_TLS_RTP_SAVPF]	= __sh_matrix_in_rtp_savpf,
 };
 
 /* ********** */
@@ -227,6 +270,10 @@ void kernelize(struct packet_stream *stream) {
 		return;
 	if (cm->conf.kernelfd < 0 || cm->conf.kernelid == -1)
 		goto no_kernel;
+	if (!stream->rtp)
+		goto no_kernel;
+	if (!stream->sfd)
+		goto no_kernel;
 
 	mylog(LOG_DEBUG, LOG_PREFIX_C "Kernelizing media stream with local port %u",
 			LOG_PARAMS_C(call), stream->sfd->fd.localport);
@@ -256,6 +303,7 @@ void kernelize(struct packet_stream *stream) {
 	mpt.src_addr.port = sink->sfd->fd.localport;
 	mpt.dst_addr.port = sink->endpoint.port;
 	mpt.rtcp_mux = stream->media->rtcp_mux;
+	mpt.dtls = stream->media->dtls;
 
 	if (IN6_IS_ADDR_V4MAPPED(&sink->endpoint.ip46)) {
 		mpt.src_addr.family = AF_INET;
@@ -273,7 +321,7 @@ void kernelize(struct packet_stream *stream) {
 	stream->handler->in->kernel(&mpt.decrypt, stream);
 	stream->handler->out->kernel(&mpt.encrypt, sink);
 
-	mutex_unlock(&stream->out_lock);
+	mutex_unlock(&sink->out_lock);
 
 	if (!mpt.encrypt.cipher || !mpt.encrypt.hmac)
 		goto no_kernel;
@@ -361,15 +409,15 @@ static void determine_handler(struct packet_stream *in, const struct packet_stre
 	if (in->has_handler)
 		return;
 
-	if (in->media->protocol == PROTO_UNKNOWN)
+	if (!in->media->protocol)
 		goto err;
-	if (out->media->protocol == PROTO_UNKNOWN)
+	if (!out->media->protocol)
 		goto err;
 
-	sh_pp = __sh_matrix[in->media->protocol];
+	sh_pp = __sh_matrix[in->media->protocol->index];
 	if (!sh_pp)
 		goto err;
-	sh = sh_pp[out->media->protocol];
+	sh = sh_pp[out->media->protocol->index];
 	if (!sh)
 		goto err;
 	in->handler = sh;
@@ -449,6 +497,12 @@ static int stream_packet(struct stream_fd *sfd, str *s, struct sockaddr_in6 *fsi
 	if (!stream->sfd)
 		goto done;
 
+	if (media->dtls && is_dtls(s)) {
+		ret = dtls(stream, s, fsin);
+		if (!ret)
+			goto done;
+	}
+
 	if (stream->stun && is_stun(s)) {
 		stun_ret = stun(s, stream, fsin);
 		if (!stun_ret)
@@ -467,7 +521,7 @@ static int stream_packet(struct stream_fd *sfd, str *s, struct sockaddr_in6 *fsi
 		sink = stream->rtcp_sink;
 		rtcp = 1;
 	}
-	else {
+	else if (stream->rtcp_sink) {
 		muxed_rtcp = rtcp_demux(s, media);
 		if (muxed_rtcp == 2) {
 			sink = stream->rtcp_sink;
@@ -476,7 +530,7 @@ static int stream_packet(struct stream_fd *sfd, str *s, struct sockaddr_in6 *fsi
 		}
 	}
 	out_srtp = sink;
-	if (rtcp && sink->rtcp_sibling)
+	if (rtcp && sink && sink->rtcp_sibling)
 		out_srtp = sink->rtcp_sibling;
 
 	if (!sink || !sink->sfd || !out_srtp->sfd || !in_srtp->sfd) {
@@ -722,8 +776,12 @@ static void call_timer_iterator(void *key, void *val, void *ptr) {
 		mutex_lock(&ps->in_lock);
 
 		sfd = ps->sfd;
-		if (!sfd)
+		if (!sfd || !ps->media)
 			goto next;
+
+		if (ps->media->dtls && sfd->dtls.init && !sfd->dtls.connected)
+			dtls(ps, NULL, NULL);
+
 		if (hlp->ports[sfd->fd.localport])
 			goto next;
 		hlp->ports[sfd->fd.localport] = sfd;
@@ -959,6 +1017,7 @@ static void callmaster_timer(void *ptr) {
 		if (sink)
 			mutex_lock(&sink->out_lock);
 
+		/* XXX this only works if the kernel module actually gets to see the packets. */
 		if (sink && sink->crypto.params.crypto_suite
 				&& ke->target.encrypt.last_index - sink->crypto.last_index > 0x4000) {
 			sink->crypto.last_index = ke->target.encrypt.last_index;
@@ -1207,6 +1266,7 @@ static void stream_fd_free(void *p) {
 
 	release_port(&f->fd, m);
 	crypto_cleanup(&f->crypto);
+	dtls_connection_cleanup(&f->dtls);
 
 	obj_put(f->call);
 }
@@ -1345,9 +1405,18 @@ static void __fill_stream(struct packet_stream *ps, const struct endpoint *ep, u
 
 static void __init_stream(struct packet_stream *ps) {
 	struct call_media *media = ps->media;
+	struct call *call = ps->call;
+	int active;
 
-	if (ps->sfd)
+	if (ps->sfd) {
 		crypto_init(&ps->sfd->crypto, &media->sdes_in.params);
+
+		if (media->dtls && !ps->fallback_rtcp) {
+			active = (ps->filled && media->setup_active);
+			dtls_connection_init(ps, active, call->dtls_cert);
+		}
+	}
+
 	crypto_init(&ps->crypto, &media->sdes_out.params);
 }
 
@@ -1366,6 +1435,7 @@ static void __init_streams(struct call_media *A, struct call_media *B, const str
 
 		/* RTP */
 		a->rtp_sink = b;
+		a->rtp = 1;
 
 		if (sp)
 			__fill_stream(a, &sp->rtp_endpoint, port_off);
@@ -1398,8 +1468,10 @@ static void __init_streams(struct call_media *A, struct call_media *B, const str
 
 		a->rtp_sink = NULL;
 		a->rtcp_sink = b;
+		a->rtp = 0;
 		a->rtcp = 1;
 		a->rtcp_sibling = NULL;
+		a->fallback_rtcp = ax->rtcp;
 
 		ax->rtcp_sibling = a;
 
@@ -1423,13 +1495,40 @@ static void __init_streams(struct call_media *A, struct call_media *B, const str
 }
 
 /* generates SDES parametes for outgoing SDP, which is our media "out" direction */
-static void __generate_crypto(struct call_media *this, struct call_media *other) {
+static void __generate_crypto(const struct sdp_ng_flags *flags, struct call_media *this,
+		struct call_media *other)
+{
 	struct crypto_params *cp = &this->sdes_out.params,
 			     *cp_in = &this->sdes_in.params;
 
-	if (this->protocol != PROTO_RTP_SAVP && this->protocol != PROTO_RTP_SAVPF) {
-		cp->crypto_suite = NULL;
+	if (!flags)
 		return;
+
+	if (!this->protocol || !this->protocol->srtp) {
+		cp->crypto_suite = NULL;
+		this->dtls = 0;
+		this->setup_passive = 0;
+		this->setup_active = 0;
+		return;
+	}
+
+	if (flags->opmode == OP_OFFER) {
+		/* we always offer actpass */
+		this->dtls = 1;
+		this->setup_passive = 1;
+		this->setup_active = 1;
+	}
+	else {
+		/* if we can be active, we will, otherwise we'll be passive */
+		if (this->setup_active)
+			this->setup_passive = 0;
+
+		/* if we're answering and doing DTLS, then skip the SDES stuff */
+		if (this->dtls) {
+			this->sdes_in.params.crypto_suite = NULL;
+			this->sdes_out.params.crypto_suite = NULL;
+			goto skip_sdes;
+		}
 	}
 
 	/* for answer case, otherwise defaults to zero */
@@ -1452,6 +1551,9 @@ static void __generate_crypto(struct call_media *this, struct call_media *other)
 	random_string((unsigned char *) cp->master_salt,
 			cp->crypto_suite->master_salt_len);
 	/* mki = mki_len = 0 */
+
+skip_sdes:
+	;
 }
 
 
@@ -1563,15 +1665,15 @@ int monologue_offer_answer(struct call_monologue *monologue, GQueue *streams,
 		 * offerer or WAS sent to the answerer. */
 
 		/* deduct protocol from stream parameters received */
-		if (other_media->protocol == PROTO_UNKNOWN) {
+		if (!other_media->protocol) {
 			other_media->protocol = sp->protocol;
-			if (other_media->protocol == PROTO_UNKNOWN)
-				other_media->protocol = PROTO_RTP_AVP;
+			if (!other_media->protocol)
+				other_media->protocol = &transport_protocols[PROTO_RTP_AVP];
 		}
 		/* allow override of outgoing protocol even if we know it already */
-		if (flags && flags->transport_protocol != PROTO_UNKNOWN)
+		if (flags && flags->transport_protocol)
 			media->protocol = flags->transport_protocol;
-		else if (media->protocol == PROTO_UNKNOWN)
+		else if (!media->protocol)
 			media->protocol = other_media->protocol;
 
 		/* copy parameters advertised by the sender of this message */
@@ -1583,16 +1685,19 @@ int monologue_offer_answer(struct call_monologue *monologue, GQueue *streams,
 		other_media->recv = media->send = sp->send;
 		other_media->send = media->recv = sp->recv;
 
-		other_media->setup_passive = sp->setup_passive;
-		other_media->setup_active = sp->setup_active;
-
+		other_media->setup_passive = sp->setup_active;
+		other_media->setup_active = sp->setup_passive;
 		other_media->fingerprint = sp->fingerprint;
+		other_media->dtls = 0;
+		if ((other_media->setup_passive || other_media->setup_active)
+				&& other_media->fingerprint.hash_func)
+			other_media->dtls = 1;
 
 		/* control rtcp-mux */
 		__rtcp_mux_logic(flags, media, other_media);
 
 		/* SDES and DTLS */
-		__generate_crypto(media, other_media);
+		__generate_crypto(flags, media, other_media);
 
 		/* deduct address family from stream parameters received */
 		other_media->desired_family = AF_INET;
@@ -1863,6 +1968,7 @@ static void __call_free(void *p) {
 	call_buffer_free(&c->buffer);
 	mutex_destroy(&c->buffer_lock);
 	rwlock_destroy(&c->master_lock);
+	obj_put(c->dtls_cert);
 
 	while (c->monologues) {
 		m = c->monologues->data;
@@ -1910,6 +2016,7 @@ static struct call *call_create(const str *callid, struct callmaster *m) {
 	c->tags = g_hash_table_new(str_hash, str_equal);
 	call_str_cpy(c, &c->callid, callid);
 	c->created = poller_now;
+	c->dtls_cert = dtls_cert();
 	return c;
 }
 
@@ -2293,20 +2400,20 @@ void calls_dump_redis(struct callmaster *m) {
 	mylog(LOG_DEBUG, "Finished dumping all call data to Redis\n");
 }
 
-enum transport_protocol transport_protocol(const str *s) {
+const struct transport_protocol *transport_protocol(const str *s) {
 	int i;
 
 	if (!s || !s->s)
 		goto out;
 
-	for (i = PROTO_UNKNOWN + 1; i < __PROTO_LAST; i++) {
-		if (strlen(transport_protocol_strings[i]) != s->len)
+	for (i = 0; i < num_transport_protocols; i++) {
+		if (strlen(transport_protocols[i].name) != s->len)
 			continue;
-		if (strncasecmp(transport_protocol_strings[i], s->s, s->len))
+		if (strncasecmp(transport_protocols[i].name, s->s, s->len))
 			continue;
-		return i;
+		return &transport_protocols[i];
 	}
 
 out:
-	return PROTO_UNKNOWN;
+	return NULL;
 }

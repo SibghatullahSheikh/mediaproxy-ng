@@ -65,7 +65,8 @@ struct mediaproxy_target_info {
 	struct mediaproxy_srtp		encrypt;
 
 	unsigned char			tos;
-	int				rtcp_mux:1;
+	int				rtcp_mux:1,
+					dtls:1;
 };
 
 struct mediaproxy_message {
