@@ -168,6 +168,14 @@ static const struct streamhandler __sh_savpf2avp = {
 	.in		= &__shio_decrypt_avpf_strip,
 	.out		= &__shio_noop,
 };
+static const struct streamhandler __sh_savp2savp = {
+	.in		= &__shio_decrypt,
+	.out		= &__shio_encrypt,
+};
+static const struct streamhandler __sh_savpf2savpf = {
+	.in		= &__shio_decrypt,
+	.out		= &__shio_encrypt,
+};
 static const struct streamhandler __sh_savpf2savp = {
 	.in		= &__shio_decrypt_avpf_strip,
 	.out		= &__shio_encrypt,
@@ -207,6 +215,22 @@ static const struct streamhandler *__sh_matrix_in_rtp_savpf[] = {
 	[PROTO_UDP_TLS_RTP_SAVP]	= &__sh_savpf2savp,
 	[PROTO_UDP_TLS_RTP_SAVPF]	= &__sh_noop,
 };
+static const struct streamhandler *__sh_matrix_in_rtp_savp_dtls[] = {
+	[PROTO_RTP_AVP]			= &__sh_savp2avp,
+	[PROTO_RTP_AVPF]		= &__sh_savp2avp,
+	[PROTO_RTP_SAVP]		= &__sh_savp2savp,
+	[PROTO_RTP_SAVPF]		= &__sh_savp2savp,
+	[PROTO_UDP_TLS_RTP_SAVP]	= &__sh_savp2savp,
+	[PROTO_UDP_TLS_RTP_SAVPF]	= &__sh_savp2savp,
+};
+static const struct streamhandler *__sh_matrix_in_rtp_savpf_dtls[] = {
+	[PROTO_RTP_AVP]			= &__sh_savpf2avp,
+	[PROTO_RTP_AVPF]		= &__sh_savp2avp,
+	[PROTO_RTP_SAVP]		= &__sh_savpf2savp,
+	[PROTO_RTP_SAVPF]		= &__sh_savp2savp,
+	[PROTO_UDP_TLS_RTP_SAVP]	= &__sh_savpf2savp,
+	[PROTO_UDP_TLS_RTP_SAVPF]	= &__sh_savp2savp,
+};
 
 /* ********** */
 
@@ -217,6 +241,15 @@ static const struct streamhandler **__sh_matrix[] = {
 	[PROTO_RTP_SAVPF]		= __sh_matrix_in_rtp_savpf,
 	[PROTO_UDP_TLS_RTP_SAVP]	= __sh_matrix_in_rtp_savp,
 	[PROTO_UDP_TLS_RTP_SAVPF]	= __sh_matrix_in_rtp_savpf,
+};
+/* special case for DTLS as we can't pass through SRTP<>SRTP */
+static const struct streamhandler **__sh_matrix_dtls[] = {
+	[PROTO_RTP_AVP]			= __sh_matrix_in_rtp_avp,
+	[PROTO_RTP_AVPF]		= __sh_matrix_in_rtp_avpf,
+	[PROTO_RTP_SAVP]		= __sh_matrix_in_rtp_savp_dtls,
+	[PROTO_RTP_SAVPF]		= __sh_matrix_in_rtp_savpf_dtls,
+	[PROTO_UDP_TLS_RTP_SAVP]	= __sh_matrix_in_rtp_savp_dtls,
+	[PROTO_UDP_TLS_RTP_SAVPF]	= __sh_matrix_in_rtp_savpf_dtls,
 };
 
 /* ********** */
@@ -405,6 +438,7 @@ static int __k_srtp_decrypt(struct mediaproxy_srtp *s, struct packet_stream *str
 /* must be called with call->master_lock held in R, and in->in_lock held */
 static void determine_handler(struct packet_stream *in, const struct packet_stream *out) {
 	const struct streamhandler **sh_pp, *sh;
+	const struct streamhandler ***matrix;
 
 	if (in->has_handler)
 		return;
@@ -414,7 +448,11 @@ static void determine_handler(struct packet_stream *in, const struct packet_stre
 	if (!out->media->protocol)
 		goto err;
 
-	sh_pp = __sh_matrix[in->media->protocol->index];
+	matrix = __sh_matrix;
+	if (in->media->dtls && out->media->dtls)
+		matrix = __sh_matrix_dtls;
+
+	sh_pp = matrix[in->media->protocol->index];
 	if (!sh_pp)
 		goto err;
 	sh = sh_pp[out->media->protocol->index];
