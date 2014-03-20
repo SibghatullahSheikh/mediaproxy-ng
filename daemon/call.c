@@ -1816,6 +1816,9 @@ static void call_destroy(struct call *c) {
 			for (o = md->streams.head; o; o = o->next) {
 				ps = o->data;
 
+				if (ps->fallback_rtcp)
+					continue;
+
 				smart_ntop_p(buf, &ps->endpoint.ip46, sizeof(buf));
 				mylog(LOG_INFO, LOG_PREFIX_C "------ Media #%u, port %5u <> %15s:%-5hu%s, "
 						"%lu p, %lu b, %lu e",
@@ -1823,7 +1826,7 @@ static void call_destroy(struct call *c) {
 						md->index,
 						(unsigned int) (ps->sfd ? ps->sfd->fd.localport : 0),
 						buf, ps->endpoint.port,
-						ps->rtcp ? " (RTCP)" : "",
+						(!ps->rtp && ps->rtcp) ? " (RTCP)" : "",
 						ps->stats.packets,
 						ps->stats.bytes,
 						ps->stats.errors);
