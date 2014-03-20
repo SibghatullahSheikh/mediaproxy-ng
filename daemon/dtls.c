@@ -411,7 +411,8 @@ static int try_connect(struct dtls_connection *d) {
 			break;
 
 		default:
-			mylog(LOG_ERROR, "DTLS error: %i", code);
+			ret = ERR_peek_last_error();
+			mylog(LOG_ERROR, "DTLS error: %i (%s)", code, ERR_reason_error_string(ret));
 			ret = -1;
 			break;
 	}
@@ -595,6 +596,8 @@ int dtls(struct packet_stream *ps, const str *s, struct sockaddr_in6 *fsin) {
 
 	ret = try_connect(d);
 	if (ret == -1) {
+		if (ps->sfd)
+			mylog(LOG_ERROR, "DTLS error on local port %hu", ps->sfd->fd.localport);
 		/* fatal error */
 		d->init = 0;
 		/* XXX ?? */
