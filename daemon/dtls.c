@@ -329,8 +329,6 @@ static int verify_callback(int ok, X509_STORE_CTX *store) {
 	struct stream_fd *sfd;
 	struct packet_stream *ps;
 	struct call_media *media;
-	X509 *cert;
-	unsigned char fp[DTLS_MAX_DIGEST_LEN];
 
 	ssl = X509_STORE_CTX_get_ex_data(store, SSL_get_ex_data_X509_STORE_CTX_idx());
 	sfd = SSL_get_app_data(ssl);
@@ -339,17 +337,36 @@ static int verify_callback(int ok, X509_STORE_CTX *store) {
 	ps = sfd->stream;
 	if (!ps)
 		return 0;
+	if (ps->fingerprint_verified)
+		return 1;
 	media = ps->media;
 	if (!media)
 		return 0;
-	if (!media->fingerprint.hash_func)
-		return 0;
 
-	cert = X509_STORE_CTX_get_current_cert(store);
-	dtls_hash(media->fingerprint.hash_func, cert, fp);
+	ps->dtls_cert = X509_STORE_CTX_get_current_cert(store);
+
+	if (!media->fingerprint.hash_func)
+		return 1; /* delay verification */
+
+	if (dtls_verify_cert(ps))
+		return 0;
+	return 1;
+}
+
+int dtls_verify_cert(struct packet_stream *ps) {
+	unsigned char fp[DTLS_MAX_DIGEST_LEN];
+	struct call_media *media;
+
+	media = ps->media;
+	if (!media)
+		return -1;
+	if (!ps->dtls_cert)
+		return -1;
+
+	dtls_hash(media->fingerprint.hash_func, ps->dtls_cert, fp);
 
 	if (memcmp(media->fingerprint.digest, fp, media->fingerprint.hash_func->num_bytes)) {
-		mylog(LOG_WARNING, "Peer certificate rejected - fingerprint mismatch");
+		mylog(LOG_WARNING, "DTLS: Peer certificate rejected - fingerprint mismatch");
 		__DBG("fingerprint expected: %02x%02x%02x%02x%02x%02x%02x%02x received: %02x%02x%02x%02x%02x%02x%02x%02x",
 			media->fingerprint.digest[0], media->fingerprint.digest[1],
 			media->fingerprint.digest[2], media->fingerprint.digest[3],
@@ -357,12 +374,13 @@ static int verify_callback(int ok, X509_STORE_CTX *store) {
 			media->fingerprint.digest[6], media->fingerprint.digest[7], 
 			fp[0], fp[1], fp[2], fp[3],
 			fp[4], fp[5], fp[6], fp[7]);
-		return 0;
+		return -1;
 	}
 
-	mylog(LOG_INFO, "Peer certificate accepted");
+	ps->fingerprint_verified = 1;
+	mylog(LOG_INFO, "DTLS: Peer certificate accepted");
 
-	return 1;
+	return 0;
 }
 
 static int try_connect(struct dtls_connection *d) {

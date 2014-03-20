@@ -8,6 +8,7 @@
 #include <glib.h>
 #include <time.h>
 #include <pcre.h>
+#include <openssl/x509.h>
 
 
 
@@ -177,6 +178,8 @@ struct packet_stream {
 	struct stats		kernel_stats;	/* LOCK: in_lock */
 	time_t			last_packet;	/* LOCK: in_lock */
 
+	X509			*dtls_cert;	/* LOCK: in_lock */
+
 	/* in_lock must be held for SETTING these: */
 	/* (XXX replace with atomic ops where appropriate) */
 	int			rtp:1;
@@ -189,6 +192,7 @@ struct packet_stream {
 	int			kernelized:1;
 	int			no_kernel_support:1;
 	int			has_handler:1;
+	int			fingerprint_verified:1;
 };
 
 /* protected by call->master_lock, except the RO elements */

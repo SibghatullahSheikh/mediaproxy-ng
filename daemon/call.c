@@ -1403,7 +1403,7 @@ static void __fill_stream(struct packet_stream *ps, const struct endpoint *ep, u
 	ps->filled = 1;
 }
 
-static void __init_stream(struct packet_stream *ps) {
+static int __init_stream(struct packet_stream *ps) {
 	struct call_media *media = ps->media;
 	struct call *call = ps->call;
 	int active;
@@ -1414,13 +1414,20 @@ static void __init_stream(struct packet_stream *ps) {
 		if (media->dtls && !ps->fallback_rtcp) {
 			active = (ps->filled && media->setup_active);
 			dtls_connection_init(ps, active, call->dtls_cert);
+
+			if (!ps->fingerprint_verified && media->fingerprint.hash_func && ps->dtls_cert) {
+				if (dtls_verify_cert(ps))
+					return -1;
+			}
 		}
 	}
 
 	crypto_init(&ps->crypto, &media->sdes_out.params);
+
+	return 0;
 }
 
-static void __init_streams(struct call_media *A, struct call_media *B, const struct stream_params *sp) {
+static int __init_streams(struct call_media *A, struct call_media *B, const struct stream_params *sp) {
 	GList *la, *lb;
 	struct packet_stream *a, *ax, *b;
 	unsigned int port_off = 0;
@@ -1439,7 +1446,8 @@ static void __init_streams(struct call_media *A, struct call_media *B, const str
 
 		if (sp)
 			__fill_stream(a, &sp->rtp_endpoint, port_off);
-		__init_stream(a);
+		if (__init_stream(a))
+			return -1;
 
 		/* RTCP */
 		if (!B->rtcp_mux) {
@@ -1485,13 +1493,16 @@ static void __init_streams(struct call_media *A, struct call_media *B, const str
 				a->implicit_rtcp = 1;
 			}
 		}
-		__init_stream(a);
+		if (__init_stream(a))
+			return -1;
 
 		la = la->next;
 		lb = lb->next;
 
 		port_off += 2;
 	}
+
+	return 0;
 }
 
 /* generates SDES parametes for outgoing SDP, which is our media "out" direction */
@@ -1632,6 +1643,16 @@ static void __rtcp_mux_logic(const struct sdp_ng_flags *flags, struct call_media
 	}
 }
 
+static void __unverify_fingerprint(struct call_media *m) {
+	GList *l;
+	struct packet_stream *ps;
+
+	for (l = m->streams.head; l; l = l->next) {
+		ps = l->data;
+		ps->fingerprint_verified = 0;
+	}
+}
+
 /* called with call->master_lock held in W */
 int monologue_offer_answer(struct call_monologue *monologue, GQueue *streams,
 		const struct sdp_ng_flags *flags)
@@ -1687,7 +1708,10 @@ int monologue_offer_answer(struct call_monologue *monologue, GQueue *streams,
 
 		other_media->setup_passive = sp->setup_active;
 		other_media->setup_active = sp->setup_passive;
-		other_media->fingerprint = sp->fingerprint;
+		if (memcmp(&other_media->fingerprint, &sp->fingerprint, sizeof(sp->fingerprint))) {
+			__unverify_fingerprint(other_media);
+			other_media->fingerprint = sp->fingerprint;
+		}
 		other_media->dtls = 0;
 		if ((other_media->setup_passive || other_media->setup_active)
 				&& other_media->fingerprint.hash_func)
@@ -1747,8 +1771,10 @@ int monologue_offer_answer(struct call_monologue *monologue, GQueue *streams,
 		}
 
 init:
-		__init_streams(media, other_media, NULL);
-		__init_streams(other_media, media, sp);
+		if (__init_streams(media, other_media, NULL))
+			return -1;
+		if (__init_streams(other_media, media, sp))
+			return -1;
 	}
 
 	return 0;
