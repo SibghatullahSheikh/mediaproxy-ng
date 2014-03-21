@@ -218,14 +218,16 @@ struct call_media {
 	GQueue			streams; /* normally RTP + RTCP */
 	GSList			*endpoint_maps;
 
+	int			initialized:1;
 	int			asymmetric:1;
 	int			send:1;
 	int			recv:1;
 	int			rtcp_mux:1;
+	int			rtcp_mux_override:1;
 	int			dtls:1;
+	int			sdes:1;
 	int			setup_active:1;
 	int			setup_passive:1;
-	int			rtcp_mux_override:1;
 };
 
 /* half a dialogue */

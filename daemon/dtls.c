@@ -591,8 +591,11 @@ int dtls(struct packet_stream *ps, const str *s, struct sockaddr_in6 *fsin) {
 	if (!d->init || !d->ssl)
 		return -1;
 
-	if (s)
+	if (s) {
 		BIO_write(d->r_bio, s->s, s->len);
+		/* we understand this as preference of DTLS over SDES */
+		ps->media->sdes = 0;
+	}
 
 	ret = try_connect(d);
 	if (ret == -1) {

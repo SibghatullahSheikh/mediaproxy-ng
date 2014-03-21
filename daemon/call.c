@@ -1447,7 +1447,8 @@ static int __init_stream(struct packet_stream *ps) {
 	int active;
 
 	if (ps->sfd) {
-		crypto_init(&ps->sfd->crypto, &media->sdes_in.params);
+		if (media->sdes)
+			crypto_init(&ps->sfd->crypto, &media->sdes_in.params);
 
 		if (media->dtls && !ps->fallback_rtcp) {
 			active = (ps->filled && media->setup_active);
@@ -1460,7 +1461,8 @@ static int __init_stream(struct packet_stream *ps) {
 		}
 	}
 
-	crypto_init(&ps->crypto, &media->sdes_out.params);
+	if (media->sdes)
+		crypto_init(&ps->crypto, &media->sdes_out.params);
 
 	return 0;
 }
@@ -1556,14 +1558,19 @@ static void __generate_crypto(const struct sdp_ng_flags *flags, struct call_medi
 	if (!this->protocol || !this->protocol->srtp) {
 		cp->crypto_suite = NULL;
 		this->dtls = 0;
+		this->sdes = 0;
 		this->setup_passive = 0;
 		this->setup_active = 0;
 		return;
 	}
 
 	if (flags->opmode == OP_OFFER) {
+		/* we use this to remember the peer's preference DTLS vs SDES */
+		if (!this->initialized) {
+			this->dtls = 1;
+			this->sdes = 1;
+		}
 		/* we always offer actpass */
-		this->dtls = 1;
 		this->setup_passive = 1;
 		this->setup_active = 1;
 	}
@@ -1574,8 +1581,7 @@ static void __generate_crypto(const struct sdp_ng_flags *flags, struct call_medi
 
 		/* if we're answering and doing DTLS, then skip the SDES stuff */
 		if (this->dtls) {
-			this->sdes_in.params.crypto_suite = NULL;
-			this->sdes_out.params.crypto_suite = NULL;
+			this->sdes = 0;
 			goto skip_sdes;
 		}
 	}
@@ -1772,6 +1778,10 @@ int monologue_offer_answer(struct call_monologue *monologue, GQueue *streams,
 			media->desired_family = sp->desired_family;
 		else if (sp->direction[1] == DIR_EXTERNAL)
 			media->desired_family = AF_INET6;
+
+
+		/* mark initial offer/answer as done */
+		media->initialized = 1;
 
 
 		/* determine number of consecutive ports needed locally.
