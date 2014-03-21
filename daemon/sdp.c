@@ -1537,7 +1537,7 @@ static void insert_crypto(struct call_media *media, struct sdp_chopper *chop) {
 	struct crypto_params *cp = &media->sdes_out.params;
 	unsigned long long ull;
 
-	if (!cp->crypto_suite)
+	if (!cp->crypto_suite || !media->sdes)
 		return;
 
 	p = b64_buf;
